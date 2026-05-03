@@ -17,7 +17,7 @@ export default async function handler(req, res) {
   try {
     // ─── 接続確認 ─────────────────────────────
     if (action === "verify") {
-      const r = await fetch(`${BASE}/listed/equities?code=72030`, { headers });
+      const r = await fetch(`${BASE}/equities/bars/daily?code=7203`, { headers });
       if (r.status === 401 || r.status === 403) {
         return res.status(401).json({ error: `APIキーが無効です（${r.status}）` });
       }
