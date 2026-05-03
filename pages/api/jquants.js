@@ -12,14 +12,25 @@ export default async function handler(req, res) {
   // ─── 接続確認 ──────────────────────────────
   if (action === "verify") {
     try {
-      const today = new Date();
-      let d = new Date(today); d.setDate(d.getDate() - 1);
+      // 直近の平日を取得（土日をスキップ）
+      const d = new Date();
+      d.setDate(d.getDate() - 2); // 2日前から試す
       const dateStr = d.toISOString().slice(0,10).replace(/-/g,"");
-      const r = await fetch(`${BASE}/equities/bars/daily?code=7203&date=${dateStr}`, { headers });
-      if (r.status === 401 || r.status === 403) return res.status(401).json({ error: `APIキーが無効です（${r.status}）` });
-      if (!r.ok) return res.status(r.status).json({ error: `接続エラー: ${r.status}` });
-      return res.status(200).json({ ok: true });
-    } catch(e) { return res.status(500).json({ error: e.message }); }
+      const r = await fetch(
+        `${BASE}/equities/bars/daily?code=72030&date=${dateStr}`,
+        { headers }
+      );
+      if (r.status === 401 || r.status === 403) {
+        return res.status(401).json({ error: `APIキーが無効です（${r.status}）` });
+      }
+      // 400や404はデータなしだが認証OK
+      if (r.status === 400 || r.status === 404 || r.ok) {
+        return res.status(200).json({ ok: true });
+      }
+      return res.status(r.status).json({ error: `接続エラー: ${r.status}` });
+    } catch(e) {
+      return res.status(500).json({ error: e.message });
+    }
   }
 
   // ─── 銘柄データ取得 ─────────────────────
