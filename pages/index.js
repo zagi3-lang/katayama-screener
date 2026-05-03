@@ -254,23 +254,23 @@ function AnalysisResult({ result, sd }) {
   );
 }
 
-// ── J-Quants API呼び出し（/api/jquants経由）──────────────────
-async function jqLogin(email, password) {
+// ── J-Quants API v2（APIキー直接認証）──────────────────
+async function jqVerify(apiKey) {
   const res = await fetch("/api/jquants", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ action: "login", email, password }),
+    body: JSON.stringify({ action: "verify", apiKey }),
   });
   const data = await res.json();
-  if (!res.ok) throw new Error(data.error || "ログイン失敗");
-  return data.idToken;
+  if (!res.ok) throw new Error(data.error || "接続失敗");
+  return true;
 }
 
-async function jqFetch(code, idToken) {
+async function jqFetch(code, apiKey) {
   const res = await fetch("/api/jquants", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ action: "fetch", code, idToken }),
+    body: JSON.stringify({ action: "fetch", code, apiKey }),
   });
   const data = await res.json();
   if (!res.ok) throw new Error(data.error || "データ取得失敗");
@@ -319,11 +319,9 @@ export default function Home() {
   const [stockData, setStockData]   = useState(null);
   const [selTheme, setSelTheme]     = useState(null);
   const [error, setError]           = useState(null);
-  // J-Quants認証
-  const [jqEmail, setJqEmail]       = useState("");
-  const [jqPass, setJqPass]         = useState("");
-  const [jqIdToken, setJqIdToken]   = useState("");
-  const [jqStatus, setJqStatus]     = useState(""); // "" | "connecting" | "ok" | "error"
+  // J-Quants認証（v2 APIキー方式）
+  const [jqApiKey, setJqApiKey]     = useState("");
+  const [jqStatus, setJqStatus]     = useState("");
   const [jqErr, setJqErr]           = useState("");
   const [showSettings, setShowSettings] = useState(false);
   const inputRef = useRef(null);
@@ -331,14 +329,13 @@ export default function Home() {
   useEffect(() => { if (mode === "analyze") inputRef.current?.focus(); }, [mode]);
 
   async function connectJQ() {
-    if (!jqEmail || !jqPass) return;
+    if (!jqApiKey) return;
     setJqStatus("connecting"); setJqErr("");
     try {
-      const token = await jqLogin(jqEmail, jqPass);
-      setJqIdToken(token);
+      await jqVerify(jqApiKey);
       setJqStatus("ok");
     } catch (e) {
-      setJqStatus("error"); setJqErr(e.message); setJqIdToken("");
+      setJqStatus("error"); setJqErr(e.message);
     }
   }
 
@@ -367,21 +364,11 @@ export default function Home() {
       const codeMatch = target.match(/\b(\d{4}[A-Z]?)\b/);
       const code = codeMatch?.[1];
 
-      if (code && jqIdToken) {
+      if (code && jqApiKey && jqStatus === "ok") {
         setStatusMsg("📡 J-Quantsから財務データを取得中...");
         try {
-          sd = await jqFetch(code, jqIdToken);
-        } catch (e) {
-          // IDトークン期限切れなら自動再取得
-          if (e.message.includes("期限") && jqEmail && jqPass) {
-            setStatusMsg("🔄 IDトークンを再取得中...");
-            try {
-              const newToken = await jqLogin(jqEmail, jqPass);
-              setJqIdToken(newToken);
-              sd = await jqFetch(code, newToken);
-            } catch (_) {}
-          }
-        }
+          sd = await jqFetch(code, jqApiKey);
+        } catch (_) {}
       }
       setStockData(sd);
 
@@ -449,33 +436,27 @@ ROE：${sd.roe != null ? sd.roe + "%（計算済）" : "取得不可"}
           {showSettings && (
             <div style={{ maxWidth: 960, margin: "12px auto 0", background: "#0d1117", border: "1px solid #30363d", borderRadius: 10, padding: 18 }}>
               <div style={{ fontSize: 13, fontWeight: 700, color: "#f0f6fc", marginBottom: 14 }}>
-                🔑 J-Quants ログイン
+                🔑 J-Quants APIキー設定
                 <span style={{ fontSize: 11, color: "#8b949e", fontWeight: 400, marginLeft: 10 }}>
-                  未登録は <a href="https://jpx-jquants.com/" target="_blank" rel="noreferrer" style={{ color: "#4db8ff" }}>jpx-jquants.com</a> で無料登録
+                  <a href="https://jpx-jquants.com/" target="_blank" rel="noreferrer" style={{ color: "#4db8ff" }}>jpx-jquants.com</a> → ログイン → API Keys
                 </span>
               </div>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr auto", gap: 8, alignItems: "flex-end" }}>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 8, alignItems: "flex-end" }}>
                 <div>
-                  <div style={{ fontSize: 11, color: "#8b949e", marginBottom: 5 }}>メールアドレス</div>
-                  <input value={jqEmail} onChange={e => setJqEmail(e.target.value)}
-                    placeholder="J-Quantsのメールアドレス"
-                    style={{ width: "100%", background: "#161b22", border: "1px solid #30363d", borderRadius: 7, padding: "9px 12px", color: "#f0f6fc", fontSize: 13, outline: "none", fontFamily: "inherit" }} />
-                </div>
-                <div>
-                  <div style={{ fontSize: 11, color: "#8b949e", marginBottom: 5 }}>パスワード</div>
-                  <input type="password" value={jqPass} onChange={e => setJqPass(e.target.value)}
+                  <div style={{ fontSize: 11, color: "#8b949e", marginBottom: 5 }}>APIキー（CVzbI-... で始まる文字列）</div>
+                  <input type="password" value={jqApiKey} onChange={e => setJqApiKey(e.target.value)}
                     onKeyDown={e => e.key === "Enter" && connectJQ()}
-                    placeholder="パスワード"
+                    placeholder="APIキーを貼り付け"
                     style={{ width: "100%", background: "#161b22", border: "1px solid #30363d", borderRadius: 7, padding: "9px 12px", color: "#f0f6fc", fontSize: 13, outline: "none", fontFamily: "inherit" }} />
                 </div>
-                <button onClick={connectJQ} disabled={jqStatus === "connecting" || !jqEmail || !jqPass}
+                <button onClick={connectJQ} disabled={jqStatus === "connecting" || !jqApiKey}
                   style={{ background: jqStatus === "connecting" ? "#21262d" : "linear-gradient(135deg,#00e5a0,#00b87a)", border: "none", borderRadius: 7, padding: "9px 20px", color: jqStatus === "connecting" ? "#8b949e" : "#0a0c10", fontSize: 14, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap", fontFamily: "inherit" }}>
-                  {jqStatus === "connecting" ? "接続中..." : "接続する"}
+                  {jqStatus === "connecting" ? "確認中..." : "接続する"}
                 </button>
               </div>
-              {jqStatus === "ok" && <div style={{ fontSize: 11, color: "#00e5a0", marginTop: 8 }}>✅ 接続成功！売上高・EPS・BPS・PER・PBR・ROEが自動取得されます。IDトークンは24時間有効で自動更新します。</div>}
+              {jqStatus === "ok" && <div style={{ fontSize: 11, color: "#00e5a0", marginTop: 8 }}>✅ 接続成功！売上高・EPS・BPS・PER・PBR・ROEが自動取得されます。</div>}
               {jqStatus === "error" && <div style={{ fontSize: 11, color: "#ff6b6b", marginTop: 8 }}>❌ {jqErr}</div>}
-              {!jqStatus && <div style={{ fontSize: 10, color: "#6e7681", marginTop: 8 }}>※ 接続するとJ-Quantsから売上高・営業利益・EPS・BPS・会社予想・PER・PBR・ROEを自動取得・計算します</div>}
+              {!jqStatus && <div style={{ fontSize: 10, color: "#6e7681", marginTop: 8 }}>※ J-QuantsダッシュボードのAPI Keysページからキーをコピーして貼り付けてください</div>}
             </div>
           )}
         </div>
