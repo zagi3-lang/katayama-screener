@@ -179,7 +179,15 @@ function AnalysisResult({ result, sd }) {
         </div>
       </div>
 
-      {/* ★ J-Quants確定データ */}
+      {/* ★ デバッグ情報（充足率0%の時のみ表示） */}
+      {sd && sd.sufficiency === 0 && sd.debug && (
+        <div style={{ background: "rgba(255,209,102,0.06)", border: "1px solid rgba(255,209,102,0.3)", borderRadius: 11, padding: 16 }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: "#ffd166", marginBottom: 8 }}>🔧 デバッグ情報（開発者用）</div>
+          <pre style={{ fontSize: 10, color: "#c9d1d9", margin: 0, whiteSpace: "pre-wrap", wordBreak: "break-all", lineHeight: 1.5, maxHeight: 200, overflow: "auto" }}>
+            {JSON.stringify(sd.debug, null, 2)}
+          </pre>
+        </div>
+      )}
       {sd && (
         <div style={{ background: "#161b22", border: "1px solid #30363d", borderRadius: 14, padding: 18 }}>
           <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 10, alignItems: "center" }}>
