@@ -345,7 +345,9 @@ export default function Home() {
   const [sLoading, setSLoading] = useState(false);
   const [sStatus,  setSStatus]  = useState("");
   const [sError,   setSError]   = useState(null);
-  const [sFilter,  setSFilter]  = useState("all");
+  const [sFilter,     setSFilter]    = useState("all");
+  const [customInput, setCustomInput] = useState("");
+  const [scanMode,    setScanMode]    = useState("watchlist"); // "watchlist" | "custom"
   // ▲▲▲
   const inputRef = useRef(null);
 
@@ -415,16 +417,17 @@ ROE：${sd.roe != null ? sd.roe + "%（計算済）" : "取得不可"}
   }
 
   // ▼▼▼ C) scanSSignal 関数追加 ▼▼▼
-  async function scanSSignal() {
+  async function scanSSignal(targetCodes) {
     setSLoading(true);
     setSResult([]);
     setSError(null);
+    const codesToScan = targetCodes || S_WATCHLIST;
     const CHUNK = 10;
     const all = [];
     try {
-      for (let i = 0; i < S_WATCHLIST.length; i += CHUNK) {
-        const chunk = S_WATCHLIST.slice(i, i + CHUNK);
-        setSStatus(`スキャン中... (${Math.min(i + CHUNK, S_WATCHLIST.length)}/${S_WATCHLIST.length})`);
+      for (let i = 0; i < codesToScan.length; i += CHUNK) {
+        const chunk = codesToScan.slice(i, i + CHUNK);
+        setSStatus(`スキャン中... (${Math.min(i + CHUNK, codesToScan.length)}/${codesToScan.length})`);
         try {
           const res = await fetch("/api/ssignal", {
             method: "POST",
@@ -620,10 +623,43 @@ ROE：${sd.roe != null ? sd.roe + "%（計算済）" : "取得不可"}
           {/* ▼▼▼ E) Sシグナル発掘タブ ▼▼▼ */}
           {mode === "ssignal" && (
             <div>
-              <div style={{ fontSize: 14, color: "#8b949e", marginBottom: 18 }}>
-                ウォッチリスト{S_WATCHLIST.length}銘柄をスキャンし、
+              {/* モード切り替え */}
+              <div style={{ display: "flex", gap: 8, marginBottom: 16, background: "#161b22", borderRadius: 10, padding: 4, border: "1px solid #30363d" }}>
+                {[["watchlist", `📋 ウォッチリスト（${S_WATCHLIST.length}銘柄）`], ["custom", "✏️ カスタム銘柄コードをスキャン"]].map(([m, label]) => (
+                  <button key={m} onClick={() => setScanMode(m)}
+                    style={{ flex: 1, padding: "10px", borderRadius: 8, cursor: "pointer", fontFamily: "inherit", fontSize: 13, fontWeight: scanMode===m?700:400,
+                      background: scanMode===m ? "linear-gradient(135deg,rgba(0,229,160,0.1),rgba(77,184,255,0.1))" : "transparent",
+                      border: scanMode===m ? "1px solid #4db8ff40" : "1px solid transparent",
+                      color: scanMode===m ? "#f0f6fc" : "#8b949e" }}>
+                    {label}
+                  </button>
+                ))}
+              </div>
+
+              {/* カスタム入力 */}
+              {scanMode === "custom" && (
+                <div style={{ background: "#161b22", border: "1px solid #30363d", borderRadius: 12, padding: 18, marginBottom: 16 }}>
+                  <div style={{ fontSize: 12, color: "#8b949e", marginBottom: 8 }}>
+                    銘柄コードをスペース・カンマ・改行で区切って入力（例：7012 4449 6384 7013）
+                  </div>
+                  <textarea
+                    value={customInput}
+                    onChange={e => setCustomInput(e.target.value)}
+                    placeholder={"6981 8035 6857 7012 4449 6384
+7013 6809 5803 6769 6723 6125
+投資の森などで気になった銘柄コードをここに貼り付け"}
+                    style={{ width: "100%", minHeight: 100, background: "#0d1117", border: "1px solid #30363d", borderRadius: 8,
+                      padding: "10px 12px", color: "#f0f6fc", fontSize: 13, outline: "none", fontFamily: "monospace", resize: "vertical", boxSizing: "border-box" }}
+                  />
+                  <div style={{ fontSize: 11, color: "#6e7681", marginTop: 6 }}>
+                    💡 投資の森でテーマを選択 → 銘柄コード一覧をコピー → ここに貼り付けてスキャン
+                  </div>
+                </div>
+              )}
+
+              <div style={{ fontSize: 13, color: "#8b949e", marginBottom: 12 }}>
                 <span style={{ color: "#00e5a0", fontWeight: 700 }}>OBV先行上昇×株価横ばい×RSI適正帯</span>
-                のSシグナル点灯銘柄を自動抽出します
+                などのパターンを自動抽出します
               </div>
 
               {/* フィルター */}
@@ -639,11 +675,20 @@ ROE：${sd.roe != null ? sd.roe + "%（計算済）" : "取得不可"}
                 ))}
               </div>
 
-              <button onClick={scanSSignal} disabled={sLoading}
+              <button onClick={() => {
+                  if (scanMode === "custom") {
+                    const codes = customInput.split(/[\s,
+]+/).map(s=>s.trim()).filter(s=>/^\d{4}$/.test(s));
+                    if (codes.length === 0) { setSError("有効な4桁の銘柄コードを入力してください"); return; }
+                    scanSSignal(codes);
+                  } else {
+                    scanSSignal(S_WATCHLIST);
+                  }
+                }} disabled={sLoading}
                 style={{ width: "100%", background: sLoading ? "#21262d" : "linear-gradient(135deg,#00e5a0,#00b87a)",
                   border: "none", borderRadius: 11, padding: "16px", color: sLoading ? "#8b949e" : "#0a0c10",
                   fontSize: 15, fontWeight: 700, cursor: sLoading ? "not-allowed" : "pointer", marginBottom: 20, fontFamily: "inherit" }}>
-                {sLoading ? `🔄 ${sStatus}` : `🔎 Sシグナルスキャン開始（${S_WATCHLIST.length}銘柄）`}
+                {sLoading ? `🔄 ${sStatus}` : scanMode === "custom" ? `🔎 カスタム銘柄をスキャン` : `🔎 ウォッチリストをスキャン（${S_WATCHLIST.length}銘柄）`}
               </button>
 
               {sLoading && (
