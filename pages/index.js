@@ -627,8 +627,8 @@ ROE：${sd.roe != null ? sd.roe + "%（計算済）" : "取得不可"}
               </div>
 
               {/* フィルター */}
-              <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
-                {[["all","全件"],["multi","S複数（仕込み濃厚）"],["lowrsi","RSI55以下（過熱前）"]].map(([f, label]) => (
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 16 }}>
+                {[["all","🔍 全件"],["S","💎 仕込みS"],["DIV","📡 OBVダイバージェンス"],["VOL","🔥 出来高急増"],["MA","📐 MA収束"],["RSI","🔄 RSI反転"]].map(([f, label]) => (
                   <button key={f} onClick={() => setSFilter(f)}
                     style={{ padding: "7px 14px", borderRadius: 8, fontSize: 12, cursor: "pointer", fontFamily: "inherit",
                       background: sFilter === f ? "rgba(0,229,160,0.1)" : "#161b22",
@@ -674,41 +674,56 @@ ROE：${sd.roe != null ? sd.roe + "%（計算済）" : "取得不可"}
                   </div>
                   {sResult
                     .filter(r => {
-                      if (sFilter === "multi")  return r.s_count >= 3;
-                      if (sFilter === "lowrsi") return r.rsi <= 55;
-                      return true;
+                      if (sFilter === "all") return true;
+                      return (r.patterns || []).some(p => p.key === sFilter);
                     })
                     .map(r => (
-                      <div key={r.code} style={{ background: "#161b22", border: "1px solid #30363d", borderRadius: 12,
-                        padding: "16px 20px", display: "grid", gridTemplateColumns: "90px 1fr auto", alignItems: "center", gap: 16 }}>
-                        <div>
-                          <div style={{ fontSize: 18, fontWeight: 800, color: "#f0f6fc" }}>{r.code}</div>
-                          <div style={{ fontSize: 10, color: "#8b949e", marginTop: 2, wordBreak: "break-all" }}>{r.name}</div>
+                      <div key={r.code} style={{ background: "#161b22", border: "1px solid #30363d", borderRadius: 12, padding: "16px 20px" }}>
+                        <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, marginBottom: 10 }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                            <div>
+                              <div style={{ fontSize: 18, fontWeight: 800, color: "#f0f6fc" }}>{r.code}</div>
+                              <div style={{ fontSize: 10, color: "#8b949e", marginTop: 2 }}>{r.name}</div>
+                            </div>
+                            <div style={{ textAlign: "center", background: "rgba(0,229,160,0.08)", border: "1px solid rgba(0,229,160,0.3)", borderRadius: 8, padding: "4px 10px" }}>
+                              <div style={{ fontSize: 16, fontWeight: 800, color: "#00e5a0" }}>{r.score}</div>
+                              <div style={{ fontSize: 9, color: "#8b949e" }}>score</div>
+                            </div>
+                          </div>
+                          <button onClick={() => { setTicker(r.code + " " + r.name); analyze(r.code + " " + r.name); }}
+                            style={{ background: "rgba(77,184,255,0.08)", border: "1px solid rgba(77,184,255,0.3)", borderRadius: 8,
+                              padding: "9px 14px", color: "#4db8ff", fontSize: 12, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap", fontFamily: "inherit" }}>
+                            🔬 詳細分析
+                          </button>
+                        </div>
+                        <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 8 }}>
+                          {(r.patterns || []).map(p => (
+                            <span key={p.key} style={{ fontSize: 11, padding: "4px 10px", borderRadius: 6, fontWeight: 700,
+                              background: "rgba(0,229,160,0.08)", border: "1px solid rgba(0,229,160,0.35)", color: "#00e5a0" }}>
+                              {p.emoji} {p.label}
+                            </span>
+                          ))}
                         </div>
                         <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-                          <span style={{ fontSize: 11, padding: "3px 9px", borderRadius: 5, fontWeight: 700,
-                            background: r.s_count >= 3 ? "rgba(0,229,160,0.1)" : "rgba(77,184,255,0.08)",
-                            border: r.s_count >= 3 ? "1px solid rgba(0,229,160,0.4)" : "1px solid rgba(77,184,255,0.2)",
-                            color: r.s_count >= 3 ? "#00e5a0" : "#4db8ff" }}>
-                            S×{r.s_count}
-                          </span>
                           <span style={{ fontSize: 11, padding: "3px 9px", borderRadius: 5, border: "1px solid #30363d",
-                            color: r.rsi <= 55 ? "#00e5a0" : r.rsi <= 63 ? "#ffd166" : "#ff6b6b",
-                            background: r.rsi <= 55 ? "rgba(0,229,160,0.06)" : r.rsi <= 63 ? "rgba(255,209,102,0.06)" : "rgba(255,107,107,0.06)" }}>
+                            color: r.rsi <= 45 ? "#00e5a0" : r.rsi <= 63 ? "#ffd166" : "#ff6b6b",
+                            background: r.rsi <= 45 ? "rgba(0,229,160,0.06)" : "rgba(255,209,102,0.06)" }}>
                             RSI {r.rsi}
                           </span>
-                          <span style={{ fontSize: 11, padding: "3px 9px", borderRadius: 5, background: "rgba(107,114,128,0.08)", border: "1px solid #30363d", color: "#8b949e" }}>
-                            横ばい {r.price_chg_pct}%
-                          </span>
+                          {r.s_count > 0 && (
+                            <span style={{ fontSize: 11, padding: "3px 9px", borderRadius: 5, background: "rgba(77,184,255,0.08)", border: "1px solid rgba(77,184,255,0.2)", color: "#4db8ff" }}>
+                              S×{r.s_count}
+                            </span>
+                          )}
                           <span style={{ fontSize: 11, padding: "3px 9px", borderRadius: 5, background: "rgba(107,114,128,0.08)", border: "1px solid #30363d", color: "#8b949e" }}>
                             ¥{r.close?.toLocaleString()}
                           </span>
+                          {(r.patterns||[]).map(p => (
+                            <span key={"d"+p.key} style={{ fontSize: 11, padding: "3px 9px", borderRadius: 5, background: "rgba(107,114,128,0.06)", border: "1px solid #30363d", color: "#6e7681" }}>
+                              {p.detail}
+                            </span>
+                          ))}
                         </div>
-                        <button onClick={() => { setTicker(r.code + " " + r.name); analyze(r.code + " " + r.name); }}
-                          style={{ background: "rgba(77,184,255,0.08)", border: "1px solid rgba(77,184,255,0.3)", borderRadius: 8,
-                            padding: "9px 14px", color: "#4db8ff", fontSize: 12, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap", fontFamily: "inherit" }}>
-                          🔬 詳細分析
-                        </button>
                       </div>
                     ))}
                 </div>
