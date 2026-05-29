@@ -438,8 +438,13 @@ ROE：${sd.roe != null ? sd.roe + "%（計算済）" : "取得不可"}
         } catch (_) {}
       }
       all.sort((a, b) => b.s_count - a.s_count);
+      all.sort((a, b) => b.s_count - a.s_count);
       setSResult(all);
-      setSStatus(`完了！ ${all.length}銘柄でSシグナル検出`);
+      if (all.length === 0) {
+        setSStatus("Sシグナル点灯銘柄なし（条件を満たす銘柄が現時点でゼロ）");
+      } else {
+        setSStatus(`完了！ ${all.length}銘柄でSシグナル検出`);
+      }
     } catch (e) {
       setSError(e.message);
     } finally {
@@ -641,7 +646,20 @@ ROE：${sd.roe != null ? sd.roe + "%（計算済）" : "取得不可"}
                 {sLoading ? `🔄 ${sStatus}` : `🔎 Sシグナルスキャン開始（${S_WATCHLIST.length}銘柄）`}
               </button>
 
-              {sLoading && <Dots color="#00e5a0" />}
+              {sLoading && (
+                <div style={{ background: "#161b22", border: "1px solid rgba(0,229,160,0.3)", borderRadius: 14, padding: 28, textAlign: "center", marginBottom: 16 }}>
+                  <div style={{ fontSize: 36, marginBottom: 12 }}>🔎</div>
+                  <div style={{ fontSize: 15, color: "#f0f6fc", fontWeight: 700, marginBottom: 8 }}>
+                    Sシグナルスキャン中...
+                  </div>
+                  <div style={{ fontSize: 13, color: "#00e5a0", marginBottom: 16, minHeight: 20 }}>{sStatus}</div>
+                  <div style={{ background: "#21262d", borderRadius: 6, height: 8, overflow: "hidden", marginBottom: 16 }}>
+                    <div style={{ height: "100%", background: "linear-gradient(90deg,#00e5a0,#4db8ff,#00e5a0)", backgroundSize: "200% 100%", borderRadius: 6, width: "60%" }} />
+                  </div>
+                  <Dots color="#00e5a0" />
+                  <div style={{ fontSize: 11, color: "#6e7681", marginTop: 12 }}>Yahoo Financeからデータ取得中。そのままお待ちください。</div>
+                </div>
+              )}
 
               {sError && (
                 <div style={{ background: "rgba(255,107,107,0.08)", border: "1px solid rgba(255,107,107,0.3)", borderRadius: 11, padding: 18, color: "#ff6b6b" }}>
@@ -696,10 +714,22 @@ ROE：${sd.roe != null ? sd.roe + "%（計算済）" : "取得不可"}
                 </div>
               )}
 
-              {!sLoading && sResult.length === 0 && !sError && (
+              {!sLoading && sResult.length === 0 && !sError && sStatus === "" && (
                 <div style={{ textAlign: "center", padding: "48px", color: "#6e7681", fontSize: 14 }}>
                   👆 スキャン開始ボタンを押してください<br />
                   <span style={{ fontSize: 12 }}>{S_WATCHLIST.length}銘柄をスキャンします（約30〜60秒）</span>
+                </div>
+              )}
+              {!sLoading && sResult.length === 0 && !sError && sStatus !== "" && (
+                <div style={{ background: "rgba(255,209,102,0.06)", border: "1px solid rgba(255,209,102,0.3)", borderRadius: 14, padding: 28, textAlign: "center" }}>
+                  <div style={{ fontSize: 32, marginBottom: 12 }}>🔍</div>
+                  <div style={{ fontSize: 14, color: "#ffd166", fontWeight: 700, marginBottom: 8 }}>現時点でSシグナル点灯銘柄はゼロでした</div>
+                  <div style={{ fontSize: 12, color: "#8b949e", lineHeight: 1.7 }}>
+                    ウォッチリスト銘柄のうち、現在の条件（OBV上昇×株価横ばい×RSI45〜63）を<br />
+                    満たす銘柄が見つかりませんでした。<br /><br />
+                    <span style={{ color: "#ffd166" }}>翌日以降に再スキャンすると変化することがあります。</span>
+                  </div>
+                  <div style={{ marginTop: 16, fontSize: 11, color: "#6e7681" }}>{sStatus}</div>
                 </div>
               )}
             </div>
