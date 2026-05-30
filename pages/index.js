@@ -21,7 +21,6 @@ const HUNT_THEMES = [
   { id: "shipbuild",label: "造船・舶用機器",            emoji: "🚢" },
 ];
 
-// ▼▼▼ A) S_WATCHLIST 追加 ▼▼▼
 const S_WATCHLIST = [
   "6954","6857","7012","7013","7011","6326","6506","6645","6702",
   "6723","6769","6762","6981","4063","8035","7735","6146","6501",
@@ -33,7 +32,6 @@ const S_WATCHLIST = [
   "6232","5572","6613","9310","2138","4168","4481",
   "2371","6809","6384","6125","6869","7730","9843",
 ];
-// ▲▲▲
 
 const verdictCfg = {
   "強い買い候補": { color: "#00e5a0", bg: "rgba(0,229,160,0.1)", label: "🔥 強い買い候補" },
@@ -340,15 +338,13 @@ export default function Home() {
   const [jqStatus, setJqStatus]     = useState("");
   const [jqErr, setJqErr]           = useState("");
   const [showSettings, setShowSettings] = useState(false);
-  // ▼▼▼ B) Sシグナル用 useState 追加 ▼▼▼
   const [sResult,  setSResult]  = useState([]);
   const [sLoading, setSLoading] = useState(false);
   const [sStatus,  setSStatus]  = useState("");
   const [sError,   setSError]   = useState(null);
   const [sFilter,     setSFilter]    = useState("all");
   const [customInput, setCustomInput] = useState("");
-  const [scanMode,    setScanMode]    = useState("watchlist"); // "watchlist" | "custom"
-  // ▲▲▲
+  const [scanMode,    setScanMode]    = useState("watchlist");
   const inputRef = useRef(null);
 
   useEffect(() => { if (mode === "analyze") inputRef.current?.focus(); }, [mode]);
@@ -416,7 +412,6 @@ ROE：${sd.roe != null ? sd.roe + "%（計算済）" : "取得不可"}
     finally { setLoading(false); setStatusMsg(""); }
   }
 
-  // ▼▼▼ C) scanSSignal 関数追加 ▼▼▼
   async function scanSSignal(targetCodes) {
     setSLoading(true);
     setSResult([]);
@@ -441,7 +436,6 @@ ROE：${sd.roe != null ? sd.roe + "%（計算済）" : "取得不可"}
         } catch (_) {}
       }
       all.sort((a, b) => b.s_count - a.s_count);
-      all.sort((a, b) => b.s_count - a.s_count);
       setSResult(all);
       if (all.length === 0) {
         setSStatus("Sシグナル点灯銘柄なし（条件を満たす銘柄が現時点でゼロ）");
@@ -454,7 +448,6 @@ ROE：${sd.roe != null ? sd.roe + "%（計算済）" : "取得不可"}
       setSLoading(false);
     }
   }
-  // ▲▲▲
 
   return (
     <>
@@ -514,7 +507,6 @@ ROE：${sd.roe != null ? sd.roe + "%（計算済）" : "取得不可"}
         </div>
 
         <div style={{ maxWidth: 900, margin: "0 auto", padding: "32px 24px" }}>
-          {/* ▼▼▼ D) Tabs に「🔎 Sシグナル発掘」追加 ▼▼▼ */}
           <div style={{ display: "flex", gap: 8, marginBottom: 28, background: "#161b22", borderRadius: 12, padding: 5, border: "1px solid #30363d" }}>
             {[["hunt", "🔍 銘柄を発掘する"], ["analyze", "🔬 銘柄を分析する"], ["ssignal", "🔎 Sシグナル発掘"]].map(([id, label]) => (
               <button key={id} onClick={() => { setMode(id); setError(null); }} style={{
@@ -526,7 +518,6 @@ ROE：${sd.roe != null ? sd.roe + "%（計算済）" : "取得不可"}
               }}>{label}</button>
             ))}
           </div>
-          {/* ▲▲▲ */}
 
           {/* HUNT */}
           {mode === "hunt" && (
@@ -620,7 +611,7 @@ ROE：${sd.roe != null ? sd.roe + "%（計算済）" : "取得不可"}
             </div>
           )}
 
-          {/* ▼▼▼ E) Sシグナル発掘タブ ▼▼▼ */}
+          {/* Sシグナル発掘 */}
           {mode === "ssignal" && (
             <div>
               {/* モード切り替え */}
@@ -636,7 +627,7 @@ ROE：${sd.roe != null ? sd.roe + "%（計算済）" : "取得不可"}
                 ))}
               </div>
 
-              {/* カスタム入力 */}
+              {/* カスタム入力エリア */}
               {scanMode === "custom" && (
                 <div style={{ background: "#161b22", border: "1px solid #30363d", borderRadius: 12, padding: 18, marginBottom: 16 }}>
                   <div style={{ fontSize: 12, color: "#8b949e", marginBottom: 8 }}>
@@ -645,9 +636,7 @@ ROE：${sd.roe != null ? sd.roe + "%（計算済）" : "取得不可"}
                   <textarea
                     value={customInput}
                     onChange={e => setCustomInput(e.target.value)}
-                    placeholder={"6981 8035 6857 7012 4449 6384
-7013 6809 5803 6769 6723 6125
-投資の森などで気になった銘柄コードをここに貼り付け"}
+                    placeholder={"6981 8035 6857 7012 4449 6384\n7013 6809 5803 6769 6723 6125\n投資の森などで気になった銘柄コードをここに貼り付け"}
                     style={{ width: "100%", minHeight: 100, background: "#0d1117", border: "1px solid #30363d", borderRadius: 8,
                       padding: "10px 12px", color: "#f0f6fc", fontSize: 13, outline: "none", fontFamily: "monospace", resize: "vertical", boxSizing: "border-box" }}
                   />
@@ -675,10 +664,10 @@ ROE：${sd.roe != null ? sd.roe + "%（計算済）" : "取得不可"}
                 ))}
               </div>
 
+              {/* スキャンボタン */}
               <button onClick={() => {
                   if (scanMode === "custom") {
-                    const codes = customInput.split(/[\s,
-]+/).map(s=>s.trim()).filter(s=>/^\d{4}$/.test(s));
+                    const codes = customInput.split(/[\s,\n]+/).map(s=>s.trim()).filter(s=>/^\d{4}$/.test(s));
                     if (codes.length === 0) { setSError("有効な4桁の銘柄コードを入力してください"); return; }
                     scanSSignal(codes);
                   } else {
@@ -694,9 +683,7 @@ ROE：${sd.roe != null ? sd.roe + "%（計算済）" : "取得不可"}
               {sLoading && (
                 <div style={{ background: "#161b22", border: "1px solid rgba(0,229,160,0.3)", borderRadius: 14, padding: 28, textAlign: "center", marginBottom: 16 }}>
                   <div style={{ fontSize: 36, marginBottom: 12 }}>🔎</div>
-                  <div style={{ fontSize: 15, color: "#f0f6fc", fontWeight: 700, marginBottom: 8 }}>
-                    Sシグナルスキャン中...
-                  </div>
+                  <div style={{ fontSize: 15, color: "#f0f6fc", fontWeight: 700, marginBottom: 8 }}>Sシグナルスキャン中...</div>
                   <div style={{ fontSize: 13, color: "#00e5a0", marginBottom: 16, minHeight: 20 }}>{sStatus}</div>
                   <div style={{ background: "#21262d", borderRadius: 6, height: 8, overflow: "hidden", marginBottom: 16 }}>
                     <div style={{ height: "100%", background: "linear-gradient(90deg,#00e5a0,#4db8ff,#00e5a0)", backgroundSize: "200% 100%", borderRadius: 6, width: "60%" }} />
@@ -777,7 +764,7 @@ ROE：${sd.roe != null ? sd.roe + "%（計算済）" : "取得不可"}
               {!sLoading && sResult.length === 0 && !sError && sStatus === "" && (
                 <div style={{ textAlign: "center", padding: "48px", color: "#6e7681", fontSize: 14 }}>
                   👆 スキャン開始ボタンを押してください<br />
-                  <span style={{ fontSize: 12 }}>{S_WATCHLIST.length}銘柄をスキャンします（約30〜60秒）</span>
+                  <span style={{ fontSize: 12 }}>{scanMode === "custom" ? "銘柄コードを入力してスキャン" : `${S_WATCHLIST.length}銘柄をスキャンします（約30〜60秒）`}</span>
                 </div>
               )}
               {!sLoading && sResult.length === 0 && !sError && sStatus !== "" && (
@@ -785,7 +772,7 @@ ROE：${sd.roe != null ? sd.roe + "%（計算済）" : "取得不可"}
                   <div style={{ fontSize: 32, marginBottom: 12 }}>🔍</div>
                   <div style={{ fontSize: 14, color: "#ffd166", fontWeight: 700, marginBottom: 8 }}>現時点でSシグナル点灯銘柄はゼロでした</div>
                   <div style={{ fontSize: 12, color: "#8b949e", lineHeight: 1.7 }}>
-                    ウォッチリスト銘柄のうち、現在の条件（OBV上昇×株価横ばい×RSI45〜63）を<br />
+                    スキャン対象銘柄のうち、現在の条件（OBV上昇×株価横ばい×RSI45〜63）を<br />
                     満たす銘柄が見つかりませんでした。<br /><br />
                     <span style={{ color: "#ffd166" }}>翌日以降に再スキャンすると変化することがあります。</span>
                   </div>
@@ -794,7 +781,6 @@ ROE：${sd.roe != null ? sd.roe + "%（計算済）" : "取得不可"}
               )}
             </div>
           )}
-          {/* ▲▲▲ */}
 
         </div>
       </div>
