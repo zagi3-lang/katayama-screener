@@ -34,10 +34,24 @@ const S_WATCHLIST = [
 ];
 
 const SIGNAL_MODES = [
-  { id: "all",        label: "🔍 全シグナル",              desc: "すべての条件で抽出" },
-  { id: "po_and_s",   label: "🏆 PO＋Sシグナル",          desc: "パーフェクトオーダー＋仕込みS（最強）" },
-  { id: "po_only",    label: "📐 パーフェクトオーダーのみ", desc: "MA5>MA25>MA75>MA200" },
-  { id: "s_only",     label: "💎 Sシグナルのみ",           desc: "OBV上昇×株価横ばい×RSI適正帯" },
+  { id: "all",       label: "🔍 全シグナル",              desc: "すべての条件で抽出" },
+  { id: "po_and_s",  label: "🏆 PO＋Sシグナル",          desc: "パーフェクトオーダー＋仕込みS（最強）" },
+  { id: "po_only",   label: "📐 パーフェクトオーダーのみ", desc: "MA5>MA25>MA75>MA200" },
+  { id: "s_only",    label: "💎 Sシグナルのみ",           desc: "OBV上昇×株価横ばい×RSI適正帯" },
+];
+
+const SECTORS = [
+  { code: "all",  label: "🌐 全業種",      count: "~3,800" },
+  { code: "3650", label: "💡 電気機器",    count: "~400" },
+  { code: "5250", label: "📡 情報・通信",  count: "~350" },
+  { code: "3600", label: "⚙️ 機械",        count: "~250" },
+  { code: "3500", label: "🔩 非鉄金属",   count: "~80" },
+  { code: "3750", label: "🔬 精密機器",   count: "~70" },
+  { code: "3250", label: "💊 医薬品",      count: "~100" },
+  { code: "3200", label: "🧪 化学",        count: "~200" },
+  { code: "3700", label: "🚗 輸送用機器",  count: "~100" },
+  { code: "6400", label: "🏢 サービス業", count: "~450" },
+  { code: "5100", label: "🚢 海運",        count: "~15" },
 ];
 
 const verdictCfg = {
@@ -50,7 +64,7 @@ const verdictCfg = {
 const ANALYZE_SYSTEM = `あなたは片山晃（五月さん）の投資哲学を体現したAIスクリーニングエージェントです。
 Web検索ツールを使い、IRバンク(irbank.net)・四季報オンライン・Yahoo!ファイナンス・企業IRページなどから最新の財務データを取得して分析してください。
 分析後、以下のJSON形式のみで出力。マークダウン記号や説明文は不要:
-{"summary":"総評（250字以内）","verdict":"買い候補","data_sources":["参照ソース1","参照ソース2"],"key_metrics":{"revenue_growth":"直近売上成長率","roe":"ROE","pbr":"PBR","per":"PER","equity_ratio":"自己資本比率"},"scores":{"growth":7,"business":8,"management":7,"market":7,"finance":6,"valuation":6,"tenbagger":7},"strengths":["強み1","強み2","強み3"],"risks":["リスク1","リスク2"],"katayama_comment":"片山晃口調の一言"}
+{"summary":"総評（250字以内）","verdict":"買い候補","data_sources":["参照ソース1"],"key_metrics":{"revenue_growth":"直近売上成長率","roe":"ROE","pbr":"PBR","per":"PER","equity_ratio":"自己資本比率"},"scores":{"growth":7,"business":8,"management":7,"market":7,"finance":6,"valuation":6,"tenbagger":7},"strengths":["強み1","強み2","強み3"],"risks":["リスク1","リスク2"],"katayama_comment":"片山晃口調の一言"}
 verdictは「強い買い候補」「買い候補」「経過観察」「見送り」のいずれか。scoresは1〜10の整数。`;
 
 const HUNT_SYSTEM = `あなたは片山晃（五月さん）の投資哲学でテンバガー候補を発掘するAIエージェントです。
@@ -64,24 +78,17 @@ function extractJSON(text) {
   const cleaned = text.replace(/```json\s*/gi, "").replace(/```\s*/g, "").trim();
   try { return JSON.parse(cleaned); } catch (_) {}
   const s = cleaned.indexOf("{"), e = cleaned.lastIndexOf("}");
-  if (s !== -1 && e > s) {
-    try { return JSON.parse(cleaned.slice(s, e + 1)); } catch (_) {}
-  }
-  throw new Error("JSONの解析に失敗しました。もう一度お試しください。");
+  if (s !== -1 && e > s) { try { return JSON.parse(cleaned.slice(s, e + 1)); } catch (_) {} }
+  throw new Error("JSONの解析に失敗しました。");
 }
 
 async function callAPI(system, userMsg) {
   const res = await fetch("/api/claude", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
+    method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ system, userMsg }),
   });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error(err?.error || "APIエラー " + res.status);
-  }
-  const data = await res.json();
-  return extractJSON(data.text);
+  if (!res.ok) { const err = await res.json().catch(() => ({})); throw new Error(err?.error || "APIエラー"); }
+  return extractJSON((await res.json()).text);
 }
 
 function scoreAvg(scores) {
@@ -97,7 +104,7 @@ function ScoreBar({ score }) {
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
       <div style={{ flex: 1, height: 5, background: "#21262d", borderRadius: 3 }}>
-        <div style={{ width: s * 10 + "%", height: "100%", background: c, borderRadius: 3, transition: "width 0.6s ease" }} />
+        <div style={{ width: s * 10 + "%", height: "100%", background: c, borderRadius: 3 }} />
       </div>
       <span style={{ fontSize: 12, color: c, width: 16, textAlign: "right", fontWeight: 700 }}>{s}</span>
     </div>
@@ -107,19 +114,7 @@ function ScoreBar({ score }) {
 function Dots({ color = "#00e5a0" }) {
   return (
     <div style={{ display: "flex", justifyContent: "center", gap: 6, marginTop: 14 }}>
-      {[0, 1, 2].map(i => (
-        <div key={i} style={{ width: 8, height: 8, borderRadius: "50%", background: color, animation: `dot 1.2s ease-in-out ${i * 0.4}s infinite` }} />
-      ))}
-    </div>
-  );
-}
-
-function MetricBadge({ label, value }) {
-  if (!value || value === "N/A") return null;
-  return (
-    <div style={{ display: "inline-flex", alignItems: "center", gap: 5, background: "rgba(77,184,255,0.08)", border: "1px solid rgba(77,184,255,0.2)", borderRadius: 6, padding: "4px 10px" }}>
-      <span style={{ fontSize: 10, color: "#8b949e" }}>{label}</span>
-      <span style={{ fontSize: 12, color: "#4db8ff", fontWeight: 700 }}>{value}</span>
+      {[0,1,2].map(i => <div key={i} style={{ width: 8, height: 8, borderRadius: "50%", background: color, animation: `dot 1.2s ease-in-out ${i*0.4}s infinite` }} />)}
     </div>
   );
 }
@@ -127,19 +122,18 @@ function MetricBadge({ label, value }) {
 function CandidateCard({ c, rank, onAnalyze }) {
   const rc = rank === 0 ? "#00e5a0" : rank === 1 ? "#4db8ff" : "#ffd166";
   const mc = c.market === "グロース" ? "#ffd166" : c.market === "スタンダード" ? "#4db8ff" : "#8b949e";
-  const sc = c.scores || {};
-  const km = c.key_metrics || {};
+  const sc = c.scores || {}, km = c.key_metrics || {};
   return (
     <div style={{ position: "relative", marginTop: 16 }}>
       <div style={{ position: "absolute", top: -11, left: 16, background: rc, color: "#0a0c10", fontSize: 10, fontWeight: 800, padding: "2px 12px", borderRadius: 10, zIndex: 1 }}>
-        #{rank + 1} 推奨{rank === 0 ? " ★" : ""}
+        #{rank+1} 推奨{rank===0?" ★":""}
       </div>
       <div style={{ background: "#161b22", border: "1px solid #30363d", borderRadius: 14, padding: 22, display: "flex", flexDirection: "column", gap: 13 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
           <div>
             <div style={{ display: "flex", alignItems: "center", gap: 9, marginBottom: 5 }}>
               <span style={{ fontSize: 20, fontWeight: 800, color: "#f0f6fc" }}>{c.code}</span>
-              <span style={{ fontSize: 10, padding: "2px 8px", borderRadius: 5, background: mc + "20", color: mc, border: "1px solid " + mc + "40" }}>{c.market}</span>
+              <span style={{ fontSize: 10, padding: "2px 8px", borderRadius: 5, background: mc+"20", color: mc, border: "1px solid "+mc+"40" }}>{c.market}</span>
             </div>
             <div style={{ fontSize: 15, fontWeight: 700, color: "#c9d1d9" }}>{c.name}</div>
           </div>
@@ -148,14 +142,11 @@ function CandidateCard({ c, rank, onAnalyze }) {
             <div style={{ fontSize: 10, color: "#8b949e", marginTop: 2 }}>/ 10</div>
           </div>
         </div>
-        {c.appeal && (
-          <div style={{ background: "rgba(0,229,160,0.06)", border: "1px solid rgba(0,229,160,0.18)", borderRadius: 7, padding: "8px 13px", fontSize: 13, color: "#00e5a0", fontWeight: 700 }}>✨ {c.appeal}</div>
-        )}
+        {c.appeal && <div style={{ background: "rgba(0,229,160,0.06)", border: "1px solid rgba(0,229,160,0.18)", borderRadius: 7, padding: "8px 13px", fontSize: 13, color: "#00e5a0", fontWeight: 700 }}>✨ {c.appeal}</div>}
         {Object.keys(km).length > 0 && (
           <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-            <MetricBadge label="売上成長" value={km.revenue_growth} />
-            <MetricBadge label="ROE" value={km.roe} />
-            <MetricBadge label="PBR" value={km.pbr} />
+            {km.revenue_growth && <div style={{ display:"inline-flex",alignItems:"center",gap:5,background:"rgba(77,184,255,0.08)",border:"1px solid rgba(77,184,255,0.2)",borderRadius:6,padding:"4px 10px" }}><span style={{fontSize:10,color:"#8b949e"}}>売上成長</span><span style={{fontSize:12,color:"#4db8ff",fontWeight:700}}>{km.revenue_growth}</span></div>}
+            {km.roe && <div style={{ display:"inline-flex",alignItems:"center",gap:5,background:"rgba(77,184,255,0.08)",border:"1px solid rgba(77,184,255,0.2)",borderRadius:6,padding:"4px 10px" }}><span style={{fontSize:10,color:"#8b949e"}}>ROE</span><span style={{fontSize:12,color:"#4db8ff",fontWeight:700}}>{km.roe}</span></div>}
           </div>
         )}
         {c.reason && <div style={{ fontSize: 13, color: "#8b949e", lineHeight: 1.75 }}>{c.reason}</div>}
@@ -167,7 +158,7 @@ function CandidateCard({ c, rank, onAnalyze }) {
             </div>
           ))}
         </div>
-        <button onClick={() => onAnalyze(c.code + " " + c.name)}
+        <button onClick={() => onAnalyze(c.code+" "+c.name)}
           style={{ background: "rgba(77,184,255,0.08)", border: "1px solid rgba(77,184,255,0.3)", borderRadius: 9, padding: 11, color: "#4db8ff", fontSize: 14, fontWeight: 700, cursor: "pointer", ...F }}>
           🔬 この銘柄を詳細分析
         </button>
@@ -176,19 +167,18 @@ function CandidateCard({ c, rank, onAnalyze }) {
   );
 }
 
-function AnalysisResult({ result, sd }) {
+function AnalysisResult({ result }) {
   const vc = verdictCfg[result.verdict] || verdictCfg["経過観察"];
-  const total = scoreAvg(result.scores);
-  const sc = result.scores || {};
+  const total = scoreAvg(result.scores), sc = result.scores || {};
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-      <div style={{ background: "#161b22", border: "1px solid " + vc.color + "50", borderRadius: 14, padding: 22, display: "flex", alignItems: "flex-start", justifyContent: "space-between", flexWrap: "wrap", gap: 16 }}>
+      <div style={{ background: "#161b22", border: "1px solid "+vc.color+"50", borderRadius: 14, padding: 22, display: "flex", alignItems: "flex-start", justifyContent: "space-between", flexWrap: "wrap", gap: 16 }}>
         <div style={{ flex: 1 }}>
-          <div style={{ display: "inline-block", background: vc.bg, border: "1px solid " + vc.color + "60", borderRadius: 7, padding: "5px 14px", color: vc.color, fontWeight: 700, fontSize: 14, marginBottom: 10 }}>{vc.label}</div>
+          <div style={{ display: "inline-block", background: vc.bg, border: "1px solid "+vc.color+"60", borderRadius: 7, padding: "5px 14px", color: vc.color, fontWeight: 700, fontSize: 14, marginBottom: 10 }}>{vc.label}</div>
           <div style={{ fontSize: 14, color: "#c9d1d9", lineHeight: 1.75 }}>{result.summary}</div>
         </div>
         <div style={{ textAlign: "center" }}>
-          <div style={{ width: 78, height: 78, borderRadius: "50%", border: "3px solid " + vc.color, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", background: vc.bg }}>
+          <div style={{ width: 78, height: 78, borderRadius: "50%", border: "3px solid "+vc.color, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", background: vc.bg }}>
             <span style={{ fontSize: 22, fontWeight: 800, color: vc.color }}>{total}</span>
             <span style={{ fontSize: 9, color: "#8b949e" }}>/ 10</span>
           </div>
@@ -209,27 +199,13 @@ function AnalysisResult({ result, sd }) {
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
         <div style={{ background: "#161b22", border: "1px solid rgba(0,229,160,0.22)", borderRadius: 14, padding: 18 }}>
           <div style={{ fontSize: 12, fontWeight: 700, color: "#00e5a0", marginBottom: 11 }}>✅ 強み</div>
-          {(result.strengths || []).map((s, i, a) => (
-            <div key={i} style={{ fontSize: 13, color: "#c9d1d9", lineHeight: 1.65, padding: "5px 0", borderBottom: i < a.length - 1 ? "1px solid #21262d" : "none" }}>・{s}</div>
-          ))}
+          {(result.strengths||[]).map((s,i,a) => <div key={i} style={{ fontSize: 13, color: "#c9d1d9", lineHeight: 1.65, padding: "5px 0", borderBottom: i<a.length-1?"1px solid #21262d":"none" }}>・{s}</div>)}
         </div>
         <div style={{ background: "#161b22", border: "1px solid rgba(255,107,107,0.22)", borderRadius: 14, padding: 18 }}>
           <div style={{ fontSize: 12, fontWeight: 700, color: "#ff6b6b", marginBottom: 11 }}>⚠️ リスク</div>
-          {(result.risks || []).map((r, i, a) => (
-            <div key={i} style={{ fontSize: 13, color: "#c9d1d9", lineHeight: 1.65, padding: "5px 0", borderBottom: i < a.length - 1 ? "1px solid #21262d" : "none" }}>・{r}</div>
-          ))}
+          {(result.risks||[]).map((r,i,a) => <div key={i} style={{ fontSize: 13, color: "#c9d1d9", lineHeight: 1.65, padding: "5px 0", borderBottom: i<a.length-1?"1px solid #21262d":"none" }}>・{r}</div>)}
         </div>
       </div>
-      {result.data_sources?.length > 0 && (
-        <div style={{ background: "#161b22", border: "1px solid #30363d", borderRadius: 11, padding: 14 }}>
-          <div style={{ fontSize: 11, color: "#8b949e", marginBottom: 8, fontWeight: 700 }}>📄 参照データソース</div>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-            {result.data_sources.map((s, i) => (
-              <span key={i} style={{ fontSize: 11, color: "#4db8ff", background: "rgba(77,184,255,0.08)", border: "1px solid rgba(77,184,255,0.2)", borderRadius: 5, padding: "3px 8px" }}>{s}</span>
-            ))}
-          </div>
-        </div>
-      )}
       <div style={{ background: "linear-gradient(135deg,#161b22,#1c2128)", border: "1px solid #4db8ff35", borderRadius: 14, padding: 22 }}>
         <div style={{ display: "flex", gap: 14, alignItems: "flex-start" }}>
           <div style={{ width: 44, height: 44, borderRadius: "50%", background: "linear-gradient(135deg,#4db8ff,#0070f3)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 17, fontWeight: 800, color: "white", flexShrink: 0 }}>五</div>
@@ -240,26 +216,8 @@ function AnalysisResult({ result, sd }) {
         </div>
       </div>
       <div style={{ fontSize: 11, color: "#6e7681", padding: "10px 15px", background: "#161b22", border: "1px solid #21262d", borderRadius: 9, lineHeight: 1.6 }}>
-        ⚠️ IRバンク・四季報等の公開情報をもとにAIが分析。投資判断はご自身の責任で行ってください。
+        ⚠️ 公開情報をもとにAIが分析。投資判断はご自身の責任で行ってください。
       </div>
-    </div>
-  );
-}
-
-function fmtM(val) {
-  if (val == null) return null;
-  return val >= 1e9 ? (val / 1e9).toFixed(1) + "十億円"
-    : val >= 1e6 ? (val / 1e6).toFixed(0) + "百万円"
-    : val.toLocaleString() + "円";
-}
-
-function DataChip({ label, value, calc }) {
-  const ok = value != null && value !== "" && value !== "-";
-  return (
-    <div style={{ display: "inline-flex", alignItems: "center", gap: 4, background: ok ? "rgba(0,229,160,0.06)" : "rgba(107,114,128,0.08)", border: ok ? "1px solid rgba(0,229,160,0.2)" : "1px solid #30363d", borderRadius: 6, padding: "4px 9px" }}>
-      <span style={{ fontSize: 9, color: ok ? (calc ? "#a78bfa" : "#00e5a0") : "#6e7681" }}>{ok ? (calc ? "⚙️" : "✅") : "－"}</span>
-      <span style={{ fontSize: 10, color: "#8b949e" }}>{label}</span>
-      <span style={{ fontSize: 12, color: ok ? "#f0f6fc" : "#4a5568", fontWeight: 700 }}>{ok ? value : "取得不可"}</span>
     </div>
   );
 }
@@ -267,444 +225,426 @@ function DataChip({ label, value, calc }) {
 function JQTestPanel({ refreshToken, setRefreshToken, onConnect }) {
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState(null);
-
   async function runTest() {
     if (!refreshToken.trim()) return;
     setTesting(true); setTestResult(null);
     try {
-      const res = await fetch("/api/jquants-test", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ refreshToken: refreshToken.trim() }),
-      });
+      const res = await fetch("/api/jquants-test", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({refreshToken:refreshToken.trim()}) });
       const data = await res.json();
       setTestResult(data);
       if (data.ok) onConnect(refreshToken.trim());
-    } catch(e) {
-      setTestResult({ ok: false, error: e.message });
-    } finally {
-      setTesting(false);
-    }
+    } catch(e) { setTestResult({ok:false,error:e.message}); }
+    finally { setTesting(false); }
   }
-
   return (
     <div style={{ marginTop: 16 }}>
       <div style={{ fontSize: 13, fontWeight: 700, color: "#f0f6fc", marginBottom: 14 }}>
         🔑 J-Quants APIキー設定
         <span style={{ fontSize: 11, color: "#8b949e", fontWeight: 400, marginLeft: 10 }}>
-          <a href="https://jpx-jquants.com/" target="_blank" rel="noreferrer" style={{ color: "#4db8ff" }}>jpx-jquants.com</a> → ログイン → APIキー
+          <a href="https://jpx-jquants.com/" target="_blank" rel="noreferrer" style={{color:"#4db8ff"}}>jpx-jquants.com</a> → ログイン → APIキー
         </span>
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 8, alignItems: "flex-end", marginBottom: 10 }}>
         <div>
           <div style={{ fontSize: 11, color: "#8b949e", marginBottom: 5 }}>APIキー</div>
-          <input type="password" value={refreshToken} onChange={e => setRefreshToken(e.target.value)}
-            onKeyDown={e => e.key === "Enter" && !testing && runTest()}
+          <input type="password" value={refreshToken} onChange={e=>setRefreshToken(e.target.value)} onKeyDown={e=>e.key==="Enter"&&!testing&&runTest()}
             placeholder="APIキーを貼り付け"
-            style={{ width: "100%", background: "#161b22", border: "1px solid #30363d", borderRadius: 7, padding: "9px 12px", color: "#f0f6fc", fontSize: 13, outline: "none", fontFamily: "inherit" }} />
+            style={{ width:"100%",background:"#161b22",border:"1px solid #30363d",borderRadius:7,padding:"9px 12px",color:"#f0f6fc",fontSize:13,outline:"none",fontFamily:"inherit" }} />
         </div>
-        <button onClick={runTest} disabled={testing || !refreshToken.trim()}
-          style={{ background: testing ? "#21262d" : "linear-gradient(135deg,#00e5a0,#00b87a)", border: "none", borderRadius: 7, padding: "9px 20px", color: testing ? "#8b949e" : "#0a0c10", fontSize: 14, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap", fontFamily: "inherit" }}>
-          {testing ? "テスト中..." : "🔬 接続テスト"}
+        <button onClick={runTest} disabled={testing||!refreshToken.trim()}
+          style={{ background:testing?"#21262d":"linear-gradient(135deg,#00e5a0,#00b87a)",border:"none",borderRadius:7,padding:"9px 20px",color:testing?"#8b949e":"#0a0c10",fontSize:14,fontWeight:700,cursor:"pointer",whiteSpace:"nowrap",fontFamily:"inherit" }}>
+          {testing?"テスト中...":"🔬 接続テスト"}
         </button>
       </div>
       {testResult && (
-        <div style={{ background: "#0d1117", border: `1px solid ${testResult.ok ? "rgba(0,229,160,0.3)" : "rgba(255,107,107,0.3)"}`, borderRadius: 10, padding: 14 }}>
-          {testResult.ok ? (
-            <div style={{ fontSize: 12, color: "#00e5a0", fontWeight: 700 }}>✅ 接続成功！全銘柄スキャン実装可能</div>
-          ) : (
-            <div>
-              <div style={{ fontSize: 12, color: "#ff6b6b", fontWeight: 700, marginBottom: 6 }}>❌ {testResult.step || "エラー"}</div>
-              <div style={{ fontSize: 12, color: "#ff9999" }}>{testResult.error}</div>
-            </div>
-          )}
+        <div style={{ background:"#0d1117",border:`1px solid ${testResult.ok?"rgba(0,229,160,0.3)":"rgba(255,107,107,0.3)"}`,borderRadius:10,padding:14 }}>
+          {testResult.ok
+            ? <div style={{fontSize:12,color:"#00e5a0",fontWeight:700}}>✅ 接続成功！業種別全銘柄スキャン可能</div>
+            : <div><div style={{fontSize:12,color:"#ff6b6b",fontWeight:700,marginBottom:6}}>❌ {testResult.error}</div></div>}
         </div>
       )}
     </div>
   );
 }
 
+// シグナル結果カード
+function SignalCard({ r, onAnalyze }) {
+  return (
+    <div style={{ background:"#161b22",border:`1px solid ${r.perfect_order?"rgba(255,215,0,0.4)":"#30363d"}`,borderRadius:12,padding:"16px 20px" }}>
+      <div style={{ display:"flex",alignItems:"flex-start",justifyContent:"space-between",gap:12,marginBottom:10 }}>
+        <div style={{ display:"flex",alignItems:"center",gap:12 }}>
+          <div>
+            <div style={{ display:"flex",alignItems:"center",gap:8 }}>
+              <span style={{ fontSize:18,fontWeight:800,color:"#f0f6fc" }}>{r.code}</span>
+              {r.perfect_order && <span style={{ fontSize:10,padding:"2px 8px",borderRadius:5,background:"rgba(255,215,0,0.15)",border:"1px solid rgba(255,215,0,0.4)",color:"#ffd700",fontWeight:700 }}>🏆 PO</span>}
+            </div>
+            <div style={{ fontSize:11,color:"#8b949e",marginTop:2 }}>{r.name}{r.sector?` · ${r.sector}`:""}</div>
+          </div>
+          <div style={{ background:"rgba(0,229,160,0.08)",border:"1px solid rgba(0,229,160,0.3)",borderRadius:8,padding:"4px 10px",textAlign:"center" }}>
+            <div style={{ fontSize:16,fontWeight:800,color:"#00e5a0" }}>{r.score}</div>
+            <div style={{ fontSize:9,color:"#8b949e" }}>score</div>
+          </div>
+        </div>
+        <button onClick={() => onAnalyze(r.code+" "+r.name)}
+          style={{ background:"rgba(77,184,255,0.08)",border:"1px solid rgba(77,184,255,0.3)",borderRadius:8,padding:"9px 14px",color:"#4db8ff",fontSize:12,fontWeight:700,cursor:"pointer",whiteSpace:"nowrap",fontFamily:"inherit" }}>
+          🔬 詳細分析
+        </button>
+      </div>
+      {r.perfect_order && (
+        <div style={{ background:"rgba(255,215,0,0.06)",border:"1px solid rgba(255,215,0,0.2)",borderRadius:6,padding:"6px 10px",marginBottom:8,fontSize:11,color:"#ffd700" }}>
+          🏆 MA5({r.ma5}) &gt; MA25({r.ma25}) &gt; MA75({r.ma75}) &gt; MA200({r.ma200})
+        </div>
+      )}
+      <div style={{ display:"flex",flexWrap:"wrap",gap:6,marginBottom:8 }}>
+        {(r.patterns||[]).map(p => <span key={p.key} style={{ fontSize:11,padding:"4px 10px",borderRadius:6,fontWeight:700,background:"rgba(0,229,160,0.08)",border:"1px solid rgba(0,229,160,0.35)",color:"#00e5a0" }}>{p.emoji} {p.label}</span>)}
+      </div>
+      <div style={{ display:"flex",flexWrap:"wrap",gap:6 }}>
+        <span style={{ fontSize:11,padding:"3px 9px",borderRadius:5,border:"1px solid #30363d",color:r.rsi<=45?"#00e5a0":r.rsi<=63?"#ffd166":"#ff6b6b" }}>RSI {r.rsi}</span>
+        <span style={{ fontSize:11,padding:"3px 9px",borderRadius:5,background:"rgba(107,114,128,0.08)",border:"1px solid #30363d",color:"#8b949e" }}>¥{r.close?.toLocaleString()}</span>
+      </div>
+    </div>
+  );
+}
+
 export default function Home() {
-  const [mode, setMode]             = useState("hunt");
-  const [ticker, setTicker]         = useState("");
-  const [loading, setLoading]       = useState(false);
-  const [statusMsg, setStatusMsg]   = useState("");
-  const [huntResult, setHuntResult] = useState(null);
+  const [mode, setMode]                   = useState("hunt");
+  const [ticker, setTicker]               = useState("");
+  const [loading, setLoading]             = useState(false);
+  const [statusMsg, setStatusMsg]         = useState("");
+  const [huntResult, setHuntResult]       = useState(null);
   const [analyzeResult, setAnalyzeResult] = useState(null);
   const [analyzeTicker, setAnalyzeTicker] = useState("");
-  const [stockData, setStockData]   = useState(null);
-  const [selTheme, setSelTheme]     = useState(null);
-  const [error, setError]           = useState(null);
-  const [jqApiKey, setJqApiKey]     = useState("");
+  const [selTheme, setSelTheme]           = useState(null);
+  const [error, setError]                 = useState(null);
+  const [jqApiKey, setJqApiKey]           = useState("");
   const [jqRefreshToken, setJqRefreshToken] = useState("");
-  const [jqStatus, setJqStatus]     = useState("");
-  const [showSettings, setShowSettings] = useState(false);
-  const [sResult,  setSResult]  = useState([]);
-  const [sLoading, setSLoading] = useState(false);
-  const [sStatus,  setSStatus]  = useState("");
-  const [sError,   setSError]   = useState(null);
-  const [sFilter,  setSFilter]  = useState("all");
+  const [jqStatus, setJqStatus]           = useState("");
+  const [showSettings, setShowSettings]   = useState(false);
+
+  // Sシグナル
+  const [sResult,  setSResult]   = useState([]);
+  const [sLoading, setSLoading]  = useState(false);
+  const [sStatus,  setSStatus]   = useState("");
+  const [sError,   setSError]    = useState(null);
+  const [sFilter,  setSFilter]   = useState("all");
   const [customInput, setCustomInput] = useState("");
   const [scanMode,    setScanMode]    = useState("watchlist");
   const [signalMode,  setSignalMode]  = useState("all");
-  const inputRef = useRef(null);
 
-  useEffect(() => { if (mode === "analyze") inputRef.current?.focus(); }, [mode]);
+  // 業種スキャン
+  const [scanTarget,      setScanTarget]      = useState("watchlist"); // "watchlist"|"sector"|"custom"
+  const [selectedSectors, setSelectedSectors] = useState(["all"]);
+  const [sectorLoading,   setSectorLoading]   = useState(false);
+  const [sectorStatus,    setSectorStatus]    = useState("");
+
+  const inputRef = useRef(null);
+  useEffect(() => { if (mode==="analyze") inputRef.current?.focus(); }, [mode]);
+
+  function toggleSector(code) {
+    if (code === "all") { setSelectedSectors(["all"]); return; }
+    setSelectedSectors(prev => {
+      const without = prev.filter(s => s !== "all");
+      return without.includes(code) ? (without.filter(s=>s!==code)||["all"]) : [...without, code];
+    });
+  }
 
   async function hunt(theme) {
     setSelTheme(theme); setLoading(true); setHuntResult(null); setError(null);
     setStatusMsg("最新データを取得中...");
     try {
-      const res = await callAPI(HUNT_SYSTEM,
-        `片山晃流で「${theme.label}」テーマの日本株テンバガー候補を3銘柄発掘してください。JSONのみ出力。`
-      );
-      if (!Array.isArray(res.candidates) || res.candidates.length === 0) throw new Error("候補データが取得できませんでした");
+      const res = await callAPI(HUNT_SYSTEM, `片山晃流で「${theme.label}」テーマの日本株テンバガー候補を3銘柄発掘してください。JSONのみ出力。`);
+      if (!Array.isArray(res.candidates)||res.candidates.length===0) throw new Error("候補データが取得できませんでした");
       setHuntResult(res);
-    } catch (e) { setError(e.message); }
+    } catch(e) { setError(e.message); }
     finally { setLoading(false); setStatusMsg(""); }
   }
 
   async function analyze(t) {
-    const target = (t || ticker).trim();
-    if (!target) return;
+    const target = (t||ticker).trim(); if (!target) return;
     setMode("analyze"); setAnalyzeTicker(target);
-    setLoading(true); setAnalyzeResult(null); setStockData(null); setError(null);
+    setLoading(true); setAnalyzeResult(null); setError(null);
     try {
-      setStatusMsg("🧠 片山流7基準で定性分析中...");
-      const dataBlock = "【データ未取得】数値はすべて「-」と表示し、定性評価のみ実施してください。";
-      const res = await callAPI(ANALYZE_SYSTEM,
-        `日本株「${target}」を分析してください。\n\n${dataBlock}\n\nJSONのみ出力。`
-      );
+      setStatusMsg("🧠 片山流7基準で分析中...");
+      const res = await callAPI(ANALYZE_SYSTEM, `日本株「${target}」を分析してください。JSONのみ出力。`);
       setAnalyzeResult(res);
-    } catch (e) { setError(e.message); }
+    } catch(e) { setError(e.message); }
     finally { setLoading(false); setStatusMsg(""); }
   }
 
-  async function scanSSignal(targetCodes) {
+  async function startScan() {
     setSLoading(true); setSResult([]); setSError(null);
-    const codesToScan = targetCodes || S_WATCHLIST;
-    const CHUNK = 10;
-    const all = [];
+
+    // 業種スキャン（J-Quants必須）
+    if (scanTarget === "sector") {
+      if (!jqApiKey) { setSError("業種スキャンにはJ-QuantsのAPIキー設定が必要です。右上⚙️設定から接続してください。"); setSLoading(false); return; }
+      setSectorLoading(true);
+      try {
+        setSStatus("銘柄マスターを取得中...");
+        const res = await fetch("/api/sector-scan", {
+          method:"POST", headers:{"Content-Type":"application/json"},
+          body: JSON.stringify({ apiKey: jqApiKey, sectors: selectedSectors, signalMode }),
+        });
+        const data = await res.json();
+        if (!data.ok) { setSError(data.error||"スキャン失敗"); return; }
+        setSResult(data.results||[]);
+        setSStatus(data.message||"完了");
+      } catch(e) { setSError(e.message); }
+      finally { setSLoading(false); setSectorLoading(false); }
+      return;
+    }
+
+    // ウォッチリスト or カスタム
+    const codesToScan = scanTarget==="custom"
+      ? customInput.split(/[\s,\n]+/).map(s=>s.trim()).filter(s=>/^\d{4}$/.test(s))
+      : S_WATCHLIST;
+    if (codesToScan.length===0) { setSError("有効な4桁の銘柄コードを入力してください"); setSLoading(false); return; }
+
+    const CHUNK = 10, all = [];
     try {
-      for (let i = 0; i < codesToScan.length; i += CHUNK) {
-        const chunk = codesToScan.slice(i, i + CHUNK);
-        setSStatus(`スキャン中... (${Math.min(i + CHUNK, codesToScan.length)}/${codesToScan.length})`);
+      for (let i=0; i<codesToScan.length; i+=CHUNK) {
+        const chunk = codesToScan.slice(i,i+CHUNK);
+        setSStatus(`スキャン中... (${Math.min(i+CHUNK,codesToScan.length)}/${codesToScan.length})`);
         try {
           const res = await fetch("/api/ssignal", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              codes: chunk,
-              apiKey: jqApiKey || undefined,
-              mode: signalMode,
-            }),
+            method:"POST", headers:{"Content-Type":"application/json"},
+            body: JSON.stringify({ codes:chunk, apiKey:jqApiKey||undefined, mode:signalMode }),
           });
-          if (res.ok) {
-            const data = await res.json();
-            all.push(...(data.results || []));
-          }
-        } catch (_) {}
+          if (res.ok) { const data=await res.json(); all.push(...(data.results||[])); }
+        } catch(_) {}
       }
-      all.sort((a, b) => b.score - a.score);
+      all.sort((a,b)=>b.score-a.score);
       setSResult(all);
-      setSStatus(all.length === 0 ? "シグナル点灯銘柄なし" : `完了！ ${all.length}銘柄でシグナル検出`);
-    } catch (e) { setSError(e.message); }
+      setSStatus(all.length===0?"条件を満たす銘柄なし":`完了！ ${all.length}銘柄検出`);
+    } catch(e) { setSError(e.message); }
     finally { setSLoading(false); }
   }
 
-  const modeCfg = SIGNAL_MODES.find(m => m.id === signalMode) || SIGNAL_MODES[0];
+  const modeCfg = SIGNAL_MODES.find(m=>m.id===signalMode)||SIGNAL_MODES[0];
+  const filteredResults = sResult.filter(r => sFilter==="all"||(r.patterns||[]).some(p=>p.key===sFilter));
 
   return (
     <>
-      <Head>
-        <title>片山晃流 AIスクリーニングエージェント</title>
-        <meta name="viewport" content="width=device-width, initial-scale=1" />
-      </Head>
-      <div style={{ minHeight: "100vh", background: "#0a0c10", color: "#e8eaf0", ...F }}>
+      <Head><title>片山晃流 AIスクリーニングエージェント</title><meta name="viewport" content="width=device-width, initial-scale=1" /></Head>
+      <div style={{ minHeight:"100vh",background:"#0a0c10",color:"#e8eaf0",...F }}>
         {/* Header */}
-        <div style={{ background: "#161b22", borderBottom: "1px solid #21262d", padding: "16px 32px", position: "sticky", top: 0, zIndex: 10 }}>
-          <div style={{ maxWidth: 960, margin: "0 auto", display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-              <div style={{ width: 38, height: 38, borderRadius: 10, background: "linear-gradient(135deg,#00e5a0,#4db8ff)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 17, fontWeight: 800, color: "#0a0c10" }}>五</div>
+        <div style={{ background:"#161b22",borderBottom:"1px solid #21262d",padding:"16px 32px",position:"sticky",top:0,zIndex:10 }}>
+          <div style={{ maxWidth:960,margin:"0 auto",display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:10 }}>
+            <div style={{ display:"flex",alignItems:"center",gap:12 }}>
+              <div style={{ width:38,height:38,borderRadius:10,background:"linear-gradient(135deg,#00e5a0,#4db8ff)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:17,fontWeight:800,color:"#0a0c10" }}>五</div>
               <div>
-                <div style={{ fontSize: 16, fontWeight: 700, color: "#f0f6fc" }}>片山晃流 AIスクリーニングエージェント</div>
-                <div style={{ fontSize: 11, color: "#8b949e" }}>J-Quants確定データ＋AI定性分析で追跡候補を発掘</div>
+                <div style={{ fontSize:16,fontWeight:700,color:"#f0f6fc" }}>片山晃流 AIスクリーニングエージェント</div>
+                <div style={{ fontSize:11,color:"#8b949e" }}>J-Quants確定データ＋AI定性分析で追跡候補を発掘</div>
               </div>
             </div>
-            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-              <div style={{
-                fontSize: 11, padding: "4px 10px", borderRadius: 7, fontWeight: 600,
-                background: jqStatus === "ok" ? "rgba(0,229,160,0.08)" : "rgba(255,209,102,0.08)",
-                border: jqStatus === "ok" ? "1px solid rgba(0,229,160,0.3)" : "1px solid rgba(255,209,102,0.3)",
-                color: jqStatus === "ok" ? "#00e5a0" : "#ffd166",
-              }}>
-                {jqStatus === "ok" ? "✅ J-Quants接続済" : "⚠️ J-Quants未接続"}
+            <div style={{ display:"flex",gap:8,alignItems:"center" }}>
+              <div style={{ fontSize:11,padding:"4px 10px",borderRadius:7,fontWeight:600,
+                background:jqStatus==="ok"?"rgba(0,229,160,0.08)":"rgba(255,209,102,0.08)",
+                border:jqStatus==="ok"?"1px solid rgba(0,229,160,0.3)":"1px solid rgba(255,209,102,0.3)",
+                color:jqStatus==="ok"?"#00e5a0":"#ffd166" }}>
+                {jqStatus==="ok"?"✅ J-Quants接続済":"⚠️ J-Quants未接続"}
               </div>
-              <button onClick={() => setShowSettings(v => !v)} style={{ background: "#21262d", border: "1px solid #30363d", borderRadius: 7, padding: "5px 12px", color: "#8b949e", fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}>
-                ⚙️ 設定
-              </button>
+              <button onClick={()=>setShowSettings(v=>!v)} style={{ background:"#21262d",border:"1px solid #30363d",borderRadius:7,padding:"5px 12px",color:"#8b949e",fontSize:12,cursor:"pointer",fontFamily:"inherit" }}>⚙️ 設定</button>
             </div>
           </div>
           {showSettings && (
-            <div style={{ maxWidth: 960, margin: "12px auto 0", background: "#0d1117", border: "1px solid #30363d", borderRadius: 10, padding: 18 }}>
-              <JQTestPanel
-                refreshToken={jqRefreshToken}
-                setRefreshToken={setJqRefreshToken}
-                onConnect={(token) => { setJqApiKey(token); setJqStatus("ok"); }}
-              />
+            <div style={{ maxWidth:960,margin:"12px auto 0",background:"#0d1117",border:"1px solid #30363d",borderRadius:10,padding:18 }}>
+              <JQTestPanel refreshToken={jqRefreshToken} setRefreshToken={setJqRefreshToken} onConnect={token=>{ setJqApiKey(token); setJqStatus("ok"); }} />
             </div>
           )}
         </div>
 
-        <div style={{ maxWidth: 900, margin: "0 auto", padding: "32px 24px" }}>
+        <div style={{ maxWidth:900,margin:"0 auto",padding:"32px 24px" }}>
           {/* Tabs */}
-          <div style={{ display: "flex", gap: 8, marginBottom: 28, background: "#161b22", borderRadius: 12, padding: 5, border: "1px solid #30363d" }}>
-            {[["hunt", "🔍 銘柄を発掘する"], ["analyze", "🔬 銘柄を分析する"], ["ssignal", "🔎 Sシグナル発掘"]].map(([id, label]) => (
-              <button key={id} onClick={() => { setMode(id); setError(null); }} style={{
-                flex: 1, padding: "13px 10px", borderRadius: 9,
-                border: mode === id ? "1px solid #4db8ff40" : "1px solid transparent",
-                background: mode === id ? "linear-gradient(135deg,rgba(0,229,160,0.1),rgba(77,184,255,0.1))" : "transparent",
-                color: mode === id ? "#f0f6fc" : "#8b949e", fontWeight: mode === id ? 700 : 400,
-                cursor: "pointer", fontSize: 14, transition: "all 0.2s", ...F,
-              }}>{label}</button>
+          <div style={{ display:"flex",gap:8,marginBottom:28,background:"#161b22",borderRadius:12,padding:5,border:"1px solid #30363d" }}>
+            {[["hunt","🔍 銘柄を発掘する"],["analyze","🔬 銘柄を分析する"],["ssignal","🔎 Sシグナル発掘"]].map(([id,label])=>(
+              <button key={id} onClick={()=>{setMode(id);setError(null);}} style={{
+                flex:1,padding:"13px 10px",borderRadius:9,
+                border:mode===id?"1px solid #4db8ff40":"1px solid transparent",
+                background:mode===id?"linear-gradient(135deg,rgba(0,229,160,0.1),rgba(77,184,255,0.1))":"transparent",
+                color:mode===id?"#f0f6fc":"#8b949e",fontWeight:mode===id?700:400,
+                cursor:"pointer",fontSize:14,...F }}>{label}</button>
             ))}
           </div>
 
           {/* HUNT */}
-          {mode === "hunt" && (
+          {mode==="hunt" && (
             <div>
-              <div style={{ fontSize: 14, color: "#8b949e", marginBottom: 18 }}>テーマを選ぶと、IRバンク・四季報等から最新データを取得してテンバガー候補を3銘柄発掘します</div>
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 11, marginBottom: 28 }}>
-                {HUNT_THEMES.map(th => (
-                  <button key={th.id} onClick={() => hunt(th)} disabled={loading} style={{
-                    background: selTheme?.id === th.id ? "rgba(0,229,160,0.09)" : "#161b22",
-                    border: selTheme?.id === th.id ? "1px solid rgba(0,229,160,0.5)" : "1px solid #30363d",
-                    borderRadius: 11, padding: "16px 14px", color: "#c9d1d9", fontSize: 13, fontWeight: 600,
-                    cursor: loading ? "not-allowed" : "pointer", textAlign: "left", ...F,
-                    display: "flex", alignItems: "center", gap: 10, transition: "all 0.2s", opacity: loading ? 0.5 : 1,
-                  }}>
-                    <span style={{ fontSize: 22 }}>{th.emoji}</span><span>{th.label}</span>
+              <div style={{ fontSize:14,color:"#8b949e",marginBottom:18 }}>テーマを選ぶと、IRバンク・四季報等から最新データを取得してテンバガー候補を3銘柄発掘します</div>
+              <div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fill, minmax(220px, 1fr))",gap:11,marginBottom:28 }}>
+                {HUNT_THEMES.map(th=>(
+                  <button key={th.id} onClick={()=>hunt(th)} disabled={loading} style={{
+                    background:selTheme?.id===th.id?"rgba(0,229,160,0.09)":"#161b22",
+                    border:selTheme?.id===th.id?"1px solid rgba(0,229,160,0.5)":"1px solid #30363d",
+                    borderRadius:11,padding:"16px 14px",color:"#c9d1d9",fontSize:13,fontWeight:600,
+                    cursor:loading?"not-allowed":"pointer",textAlign:"left",...F,
+                    display:"flex",alignItems:"center",gap:10,opacity:loading?0.5:1 }}>
+                    <span style={{fontSize:22}}>{th.emoji}</span><span>{th.label}</span>
                   </button>
                 ))}
               </div>
-              {loading && (
-                <div style={{ textAlign: "center", padding: "56px 0", color: "#8b949e" }}>
-                  <div style={{ fontSize: 42, marginBottom: 14 }}>🔍</div>
-                  <div style={{ fontSize: 15, marginBottom: 6 }}>「<span style={{ color: "#00e5a0" }}>{selTheme?.label}</span>」のテンバガー候補を発掘中...</div>
-                  <Dots color="#00e5a0" />
-                </div>
-              )}
-              {error && !loading && (
-                <div style={{ background: "rgba(255,107,107,0.08)", border: "1px solid rgba(255,107,107,0.3)", borderRadius: 11, padding: 18 }}>
-                  <div style={{ color: "#ff6b6b", fontWeight: 700, marginBottom: 6 }}>⚠️ エラー</div>
-                  <div style={{ color: "#ff9999", fontSize: 13 }}>{error}</div>
-                </div>
-              )}
-              {huntResult && !loading && (
+              {loading && <div style={{textAlign:"center",padding:"56px 0",color:"#8b949e"}}><div style={{fontSize:42,marginBottom:14}}>🔍</div><div style={{fontSize:15,marginBottom:6}}>「<span style={{color:"#00e5a0"}}>{selTheme?.label}</span>」のテンバガー候補を発掘中...</div><Dots color="#00e5a0"/></div>}
+              {error&&!loading && <div style={{background:"rgba(255,107,107,0.08)",border:"1px solid rgba(255,107,107,0.3)",borderRadius:11,padding:18}}><div style={{color:"#ff6b6b",fontWeight:700,marginBottom:6}}>⚠️ エラー</div><div style={{color:"#ff9999",fontSize:13}}>{error}</div></div>}
+              {huntResult&&!loading && (
                 <div>
-                  <div style={{ background: "linear-gradient(135deg,#161b22,#1c2128)", border: "1px solid #4db8ff35", borderRadius: 14, padding: 20, marginBottom: 22, display: "flex", gap: 14, alignItems: "flex-start" }}>
-                    <div style={{ width: 38, height: 38, borderRadius: "50%", background: "linear-gradient(135deg,#4db8ff,#0070f3)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15, fontWeight: 800, color: "white" }}>五</div>
-                    <div>
-                      <div style={{ fontSize: 11, color: "#4db8ff", marginBottom: 5, fontWeight: 700 }}>片山晃（五月さん）のテーマ評価</div>
-                      <div style={{ fontSize: 14, color: "#f0f6fc", lineHeight: 1.8, fontStyle: "italic" }}>「{huntResult.theme_comment}」</div>
-                    </div>
+                  <div style={{background:"linear-gradient(135deg,#161b22,#1c2128)",border:"1px solid #4db8ff35",borderRadius:14,padding:20,marginBottom:22,display:"flex",gap:14,alignItems:"flex-start"}}>
+                    <div style={{width:38,height:38,borderRadius:"50%",background:"linear-gradient(135deg,#4db8ff,#0070f3)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:15,fontWeight:800,color:"white"}}>五</div>
+                    <div><div style={{fontSize:11,color:"#4db8ff",marginBottom:5,fontWeight:700}}>片山晃（五月さん）のテーマ評価</div><div style={{fontSize:14,color:"#f0f6fc",lineHeight:1.8,fontStyle:"italic"}}>「{huntResult.theme_comment}」</div></div>
                   </div>
-                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 16 }}>
-                    {huntResult.candidates.map((c, i) => (
-                      <CandidateCard key={i} c={c} rank={i} onAnalyze={analyze} />
-                    ))}
+                  <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill, minmax(280px, 1fr))",gap:16}}>
+                    {huntResult.candidates.map((c,i)=><CandidateCard key={i} c={c} rank={i} onAnalyze={analyze}/>)}
                   </div>
                 </div>
               )}
-              {!huntResult && !loading && !error && (
-                <div style={{ textAlign: "center", padding: "48px", color: "#6e7681", fontSize: 14 }}>👆 テーマを選択してください</div>
-              )}
+              {!huntResult&&!loading&&!error && <div style={{textAlign:"center",padding:"48px",color:"#6e7681",fontSize:14}}>👆 テーマを選択してください</div>}
             </div>
           )}
 
           {/* ANALYZE */}
-          {mode === "analyze" && (
+          {mode==="analyze" && (
             <div>
-              <div style={{ background: "#161b22", border: "1px solid #30363d", borderRadius: 14, padding: 22, marginBottom: 22 }}>
-                <div style={{ fontSize: 13, color: "#8b949e", marginBottom: 9 }}>銘柄コード または 企業名</div>
-                <div style={{ display: "flex", gap: 10 }}>
-                  <input ref={inputRef} value={ticker} onChange={e => setTicker(e.target.value)} onKeyDown={e => e.key === "Enter" && !loading && analyze()}
+              <div style={{background:"#161b22",border:"1px solid #30363d",borderRadius:14,padding:22,marginBottom:22}}>
+                <div style={{fontSize:13,color:"#8b949e",marginBottom:9}}>銘柄コード または 企業名</div>
+                <div style={{display:"flex",gap:10}}>
+                  <input ref={inputRef} value={ticker} onChange={e=>setTicker(e.target.value)} onKeyDown={e=>e.key==="Enter"&&!loading&&analyze()}
                     placeholder="例：5803 / 藤倉コンポジット / 川崎重工"
-                    style={{ flex: 1, background: "#0d1117", border: "1px solid #30363d", borderRadius: 9, padding: "13px 16px", color: "#f0f6fc", fontSize: 15, outline: "none", ...F }} />
-                  <button onClick={() => analyze()} disabled={loading || !ticker.trim()} style={{
-                    background: loading ? "#21262d" : "linear-gradient(135deg,#00e5a0,#00b87a)", border: "none", borderRadius: 9,
-                    padding: "13px 22px", color: loading ? "#8b949e" : "#0a0c10", fontSize: 14, fontWeight: 700,
-                    cursor: loading ? "not-allowed" : "pointer", whiteSpace: "nowrap", ...F,
-                  }}>{loading ? "分析中..." : "最新データで分析"}</button>
+                    style={{flex:1,background:"#0d1117",border:"1px solid #30363d",borderRadius:9,padding:"13px 16px",color:"#f0f6fc",fontSize:15,outline:"none",...F}}/>
+                  <button onClick={()=>analyze()} disabled={loading||!ticker.trim()} style={{background:loading?"#21262d":"linear-gradient(135deg,#00e5a0,#00b87a)",border:"none",borderRadius:9,padding:"13px 22px",color:loading?"#8b949e":"#0a0c10",fontSize:14,fontWeight:700,cursor:loading?"not-allowed":"pointer",whiteSpace:"nowrap",...F}}>
+                    {loading?"分析中...":"最新データで分析"}
+                  </button>
                 </div>
               </div>
-              {loading && (
-                <div style={{ textAlign: "center", padding: "56px 0", color: "#8b949e" }}>
-                  <div style={{ fontSize: 42, marginBottom: 14 }}>🔬</div>
-                  <div style={{ fontSize: 15, marginBottom: 6 }}>「<span style={{ color: "#4db8ff" }}>{analyzeTicker}</span>」を分析中...</div>
-                  <div style={{ fontSize: 13, color: "#4db8ff", minHeight: 20 }}>{statusMsg}</div>
-                  <Dots color="#4db8ff" />
-                </div>
-              )}
-              {error && !loading && (
-                <div style={{ background: "rgba(255,107,107,0.08)", border: "1px solid rgba(255,107,107,0.3)", borderRadius: 11, padding: 18 }}>
-                  <div style={{ color: "#ff6b6b", fontWeight: 700 }}>⚠️ エラー</div>
-                  <div style={{ color: "#ff9999", fontSize: 13 }}>{error}</div>
-                </div>
-              )}
-              {analyzeResult && !loading && <AnalysisResult result={analyzeResult} sd={stockData} />}
-              {!analyzeResult && !loading && !error && (
-                <div style={{ textAlign: "center", padding: "48px", color: "#6e7681", fontSize: 14 }}>👆 銘柄を入力して分析</div>
-              )}
+              {loading && <div style={{textAlign:"center",padding:"56px 0",color:"#8b949e"}}><div style={{fontSize:42,marginBottom:14}}>🔬</div><div style={{fontSize:15,marginBottom:6}}>「<span style={{color:"#4db8ff"}}>{analyzeTicker}</span>」を分析中...</div><div style={{fontSize:13,color:"#4db8ff",minHeight:20}}>{statusMsg}</div><Dots color="#4db8ff"/></div>}
+              {error&&!loading && <div style={{background:"rgba(255,107,107,0.08)",border:"1px solid rgba(255,107,107,0.3)",borderRadius:11,padding:18}}><div style={{color:"#ff6b6b",fontWeight:700}}>⚠️ エラー</div><div style={{color:"#ff9999",fontSize:13}}>{error}</div></div>}
+              {analyzeResult&&!loading && <AnalysisResult result={analyzeResult}/>}
+              {!analyzeResult&&!loading&&!error && <div style={{textAlign:"center",padding:"48px",color:"#6e7681",fontSize:14}}>👆 銘柄を入力して分析</div>}
             </div>
           )}
 
           {/* Sシグナル発掘 */}
-          {mode === "ssignal" && (
+          {mode==="ssignal" && (
             <div>
-              {/* シグナルモード選択 */}
-              <div style={{ background: "#161b22", border: "1px solid #30363d", borderRadius: 12, padding: 16, marginBottom: 16 }}>
-                <div style={{ fontSize: 12, color: "#8b949e", marginBottom: 10, fontWeight: 700 }}>📊 スクリーニングモード</div>
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-                  {SIGNAL_MODES.map(m => (
-                    <button key={m.id} onClick={() => setSignalMode(m.id)}
-                      style={{ padding: "10px 12px", borderRadius: 8, cursor: "pointer", fontFamily: "inherit", textAlign: "left",
-                        background: signalMode===m.id ? "linear-gradient(135deg,rgba(0,229,160,0.12),rgba(77,184,255,0.12))" : "#0d1117",
-                        border: signalMode===m.id ? "1px solid rgba(0,229,160,0.5)" : "1px solid #30363d",
-                        color: signalMode===m.id ? "#f0f6fc" : "#8b949e" }}>
-                      <div style={{ fontSize: 13, fontWeight: signalMode===m.id ? 700 : 400 }}>{m.label}</div>
-                      <div style={{ fontSize: 11, color: "#6e7681", marginTop: 3 }}>{m.desc}</div>
+              {/* シグナルモード */}
+              <div style={{background:"#161b22",border:"1px solid #30363d",borderRadius:12,padding:16,marginBottom:16}}>
+                <div style={{fontSize:12,color:"#8b949e",marginBottom:10,fontWeight:700}}>📊 スクリーニングモード</div>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+                  {SIGNAL_MODES.map(m=>(
+                    <button key={m.id} onClick={()=>setSignalMode(m.id)}
+                      style={{padding:"10px 12px",borderRadius:8,cursor:"pointer",fontFamily:"inherit",textAlign:"left",
+                        background:signalMode===m.id?"linear-gradient(135deg,rgba(0,229,160,0.12),rgba(77,184,255,0.12))":"#0d1117",
+                        border:signalMode===m.id?"1px solid rgba(0,229,160,0.5)":"1px solid #30363d",
+                        color:signalMode===m.id?"#f0f6fc":"#8b949e"}}>
+                      <div style={{fontSize:13,fontWeight:signalMode===m.id?700:400}}>{m.label}</div>
+                      <div style={{fontSize:11,color:"#6e7681",marginTop:3}}>{m.desc}</div>
                     </button>
                   ))}
                 </div>
               </div>
 
-              {/* スキャン対象モード */}
-              <div style={{ display: "flex", gap: 8, marginBottom: 16, background: "#161b22", borderRadius: 10, padding: 4, border: "1px solid #30363d" }}>
-                {[["watchlist", `📋 ウォッチリスト（${S_WATCHLIST.length}銘柄）`], ["custom", "✏️ カスタム銘柄コードをスキャン"]].map(([m, label]) => (
-                  <button key={m} onClick={() => setScanMode(m)}
-                    style={{ flex: 1, padding: "10px", borderRadius: 8, cursor: "pointer", fontFamily: "inherit", fontSize: 13, fontWeight: scanMode===m?700:400,
-                      background: scanMode===m ? "linear-gradient(135deg,rgba(0,229,160,0.1),rgba(77,184,255,0.1))" : "transparent",
-                      border: scanMode===m ? "1px solid #4db8ff40" : "1px solid transparent",
-                      color: scanMode===m ? "#f0f6fc" : "#8b949e" }}>
-                    {label}
-                  </button>
-                ))}
+              {/* スキャン対象 */}
+              <div style={{background:"#161b22",border:"1px solid #30363d",borderRadius:12,padding:16,marginBottom:16}}>
+                <div style={{fontSize:12,color:"#8b949e",marginBottom:10,fontWeight:700}}>🎯 スキャン対象</div>
+                <div style={{display:"flex",gap:8,marginBottom:12}}>
+                  {[["watchlist",`📋 ウォッチリスト（${S_WATCHLIST.length}銘柄）`],["sector","🏭 業種別スキャン"],["custom","✏️ カスタム"]].map(([t,label])=>(
+                    <button key={t} onClick={()=>setScanTarget(t)}
+                      style={{flex:1,padding:"9px 8px",borderRadius:8,cursor:"pointer",fontFamily:"inherit",fontSize:12,fontWeight:scanTarget===t?700:400,
+                        background:scanTarget===t?"linear-gradient(135deg,rgba(0,229,160,0.1),rgba(77,184,255,0.1))":"transparent",
+                        border:scanTarget===t?"1px solid #4db8ff40":"1px solid #30363d",
+                        color:scanTarget===t?"#f0f6fc":"#8b949e"}}>
+                      {label}
+                    </button>
+                  ))}
+                </div>
+
+                {/* 業種選択 */}
+                {scanTarget==="sector" && (
+                  <div>
+                    {jqStatus!=="ok" && (
+                      <div style={{background:"rgba(255,209,102,0.08)",border:"1px solid rgba(255,209,102,0.3)",borderRadius:8,padding:"10px 14px",marginBottom:10,fontSize:12,color:"#ffd166"}}>
+                        ⚠️ 業種スキャンにはJ-Quantsのご接続が必要です。右上⚙️設定からAPIキーを入力してください。
+                      </div>
+                    )}
+                    <div style={{fontSize:11,color:"#8b949e",marginBottom:8}}>業種を選択（複数可）</div>
+                    <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
+                      {SECTORS.map(s=>{
+                        const sel = selectedSectors.includes(s.code)||(s.code==="all"&&selectedSectors.includes("all"));
+                        return (
+                          <button key={s.code} onClick={()=>toggleSector(s.code)}
+                            style={{padding:"7px 12px",borderRadius:8,fontSize:12,cursor:"pointer",fontFamily:"inherit",
+                              background:sel?"rgba(0,229,160,0.1)":"#0d1117",
+                              border:sel?"1px solid rgba(0,229,160,0.5)":"1px solid #30363d",
+                              color:sel?"#00e5a0":"#8b949e"}}>
+                            {s.label} <span style={{fontSize:10,color:"#6e7681"}}>({s.count})</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {/* カスタム入力 */}
+                {scanTarget==="custom" && (
+                  <div>
+                    <div style={{fontSize:12,color:"#8b949e",marginBottom:8}}>銘柄コードをスペース・カンマ・改行で入力</div>
+                    <textarea value={customInput} onChange={e=>setCustomInput(e.target.value)}
+                      placeholder={"6981 8035 6857 7012 4449\n7013 6809 5803 6769"}
+                      style={{width:"100%",minHeight:80,background:"#0d1117",border:"1px solid #30363d",borderRadius:8,padding:"10px 12px",color:"#f0f6fc",fontSize:13,outline:"none",fontFamily:"monospace",resize:"vertical",boxSizing:"border-box"}}/>
+                  </div>
+                )}
               </div>
 
-              {scanMode === "custom" && (
-                <div style={{ background: "#161b22", border: "1px solid #30363d", borderRadius: 12, padding: 18, marginBottom: 16 }}>
-                  <div style={{ fontSize: 12, color: "#8b949e", marginBottom: 8 }}>銘柄コードをスペース・カンマ・改行で区切って入力</div>
-                  <textarea value={customInput} onChange={e => setCustomInput(e.target.value)}
-                    placeholder={"6981 8035 6857 7012 4449 6384\n7013 6809 5803 6769 6723 6125"}
-                    style={{ width: "100%", minHeight: 100, background: "#0d1117", border: "1px solid #30363d", borderRadius: 8,
-                      padding: "10px 12px", color: "#f0f6fc", fontSize: 13, outline: "none", fontFamily: "monospace", resize: "vertical", boxSizing: "border-box" }} />
-                  <div style={{ fontSize: 11, color: "#6e7681", marginTop: 6 }}>💡 投資の森などから銘柄コードをコピー → 貼り付けてスキャン</div>
-                </div>
-              )}
-
               {/* フィルター */}
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 16 }}>
-                {[["all","🔍 全件"],["PO","🏆 PO"],["S","💎 仕込みS"],["DIV","📡 OBVダイバージェンス"],["VOL","🔥 出来高急増"],["MA","📐 MA収束"],["RSI","🔄 RSI反転"]].map(([f, label]) => (
-                  <button key={f} onClick={() => setSFilter(f)}
-                    style={{ padding: "7px 14px", borderRadius: 8, fontSize: 12, cursor: "pointer", fontFamily: "inherit",
-                      background: sFilter === f ? "rgba(0,229,160,0.1)" : "#161b22",
-                      border: sFilter === f ? "1px solid rgba(0,229,160,0.5)" : "1px solid #30363d",
-                      color: sFilter === f ? "#00e5a0" : "#8b949e" }}>
+              <div style={{display:"flex",flexWrap:"wrap",gap:8,marginBottom:16}}>
+                {[["all","🔍 全件"],["PO","🏆 PO"],["S","💎 仕込みS"],["DIV","📡 OBVダイバージェンス"],["VOL","🔥 出来高急増"],["MA","📐 MA収束"],["RSI","🔄 RSI反転"]].map(([f,label])=>(
+                  <button key={f} onClick={()=>setSFilter(f)}
+                    style={{padding:"7px 14px",borderRadius:8,fontSize:12,cursor:"pointer",fontFamily:"inherit",
+                      background:sFilter===f?"rgba(0,229,160,0.1)":"#161b22",
+                      border:sFilter===f?"1px solid rgba(0,229,160,0.5)":"1px solid #30363d",
+                      color:sFilter===f?"#00e5a0":"#8b949e"}}>
                     {label}
                   </button>
                 ))}
               </div>
 
               {/* スキャンボタン */}
-              <button onClick={() => {
-                if (scanMode === "custom") {
-                  const codes = customInput.split(/[\s,\n]+/).map(s=>s.trim()).filter(s=>/^\d{4}$/.test(s));
-                  if (codes.length === 0) { setSError("有効な4桁の銘柄コードを入力してください"); return; }
-                  scanSSignal(codes);
-                } else { scanSSignal(S_WATCHLIST); }
-              }} disabled={sLoading}
-                style={{ width: "100%", background: sLoading ? "#21262d" : "linear-gradient(135deg,#00e5a0,#00b87a)",
-                  border: "none", borderRadius: 11, padding: "16px", color: sLoading ? "#8b949e" : "#0a0c10",
-                  fontSize: 15, fontWeight: 700, cursor: sLoading ? "not-allowed" : "pointer", marginBottom: 20, fontFamily: "inherit" }}>
-                {sLoading ? `🔄 ${sStatus}` : `${modeCfg.label} でスキャン開始`}
+              <button onClick={startScan} disabled={sLoading}
+                style={{width:"100%",background:sLoading?"#21262d":"linear-gradient(135deg,#00e5a0,#00b87a)",
+                  border:"none",borderRadius:11,padding:"16px",color:sLoading?"#8b949e":"#0a0c10",
+                  fontSize:15,fontWeight:700,cursor:sLoading?"not-allowed":"pointer",marginBottom:20,fontFamily:"inherit"}}>
+                {sLoading?`🔄 ${sStatus}`:`${modeCfg.label} でスキャン開始`}
               </button>
 
               {sLoading && (
-                <div style={{ background: "#161b22", border: "1px solid rgba(0,229,160,0.3)", borderRadius: 14, padding: 28, textAlign: "center", marginBottom: 16 }}>
-                  <div style={{ fontSize: 36, marginBottom: 12 }}>🔎</div>
-                  <div style={{ fontSize: 15, color: "#f0f6fc", fontWeight: 700, marginBottom: 8 }}>スキャン中...</div>
-                  <div style={{ fontSize: 13, color: "#00e5a0", marginBottom: 16 }}>{sStatus}</div>
-                  <Dots color="#00e5a0" />
-                  {jqStatus === "ok" && <div style={{ fontSize: 11, color: "#4db8ff", marginTop: 12 }}>✅ J-Quants APIで高精度スキャン中</div>}
+                <div style={{background:"#161b22",border:"1px solid rgba(0,229,160,0.3)",borderRadius:14,padding:28,textAlign:"center",marginBottom:16}}>
+                  <div style={{fontSize:36,marginBottom:12}}>🔎</div>
+                  <div style={{fontSize:15,color:"#f0f6fc",fontWeight:700,marginBottom:8}}>スキャン中...</div>
+                  <div style={{fontSize:13,color:"#00e5a0",marginBottom:16}}>{sStatus}</div>
+                  <Dots color="#00e5a0"/>
+                  {jqStatus==="ok" && <div style={{fontSize:11,color:"#4db8ff",marginTop:12}}>✅ J-Quants APIで高精度スキャン中</div>}
                 </div>
               )}
 
-              {sError && (
-                <div style={{ background: "rgba(255,107,107,0.08)", border: "1px solid rgba(255,107,107,0.3)", borderRadius: 11, padding: 18, color: "#ff6b6b" }}>⚠️ {sError}</div>
-              )}
+              {sError && <div style={{background:"rgba(255,107,107,0.08)",border:"1px solid rgba(255,107,107,0.3)",borderRadius:11,padding:18,color:"#ff6b6b"}}>⚠️ {sError}</div>}
 
-              {sResult.length > 0 && !sLoading && (
-                <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                  <div style={{ fontSize: 13, color: "#00e5a0", fontWeight: 700, marginBottom: 4 }}>
-                    ✅ {sResult.length}銘柄検出 — スコア順
-                  </div>
-                  {sResult.filter(r => sFilter === "all" || (r.patterns||[]).some(p => p.key === sFilter)).map(r => (
-                    <div key={r.code} style={{ background: "#161b22", border: `1px solid ${r.perfect_order ? "rgba(255,215,0,0.4)" : "#30363d"}`, borderRadius: 12, padding: "16px 20px" }}>
-                      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, marginBottom: 10 }}>
-                        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                          <div>
-                            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                              <span style={{ fontSize: 18, fontWeight: 800, color: "#f0f6fc" }}>{r.code}</span>
-                              {r.perfect_order && (
-                                <span style={{ fontSize: 10, padding: "2px 8px", borderRadius: 5, background: "rgba(255,215,0,0.15)", border: "1px solid rgba(255,215,0,0.4)", color: "#ffd700", fontWeight: 700 }}>🏆 PO</span>
-                              )}
-                            </div>
-                            <div style={{ fontSize: 10, color: "#8b949e", marginTop: 2 }}>{r.name}</div>
-                          </div>
-                          <div style={{ background: "rgba(0,229,160,0.08)", border: "1px solid rgba(0,229,160,0.3)", borderRadius: 8, padding: "4px 10px", textAlign: "center" }}>
-                            <div style={{ fontSize: 16, fontWeight: 800, color: "#00e5a0" }}>{r.score}</div>
-                            <div style={{ fontSize: 9, color: "#8b949e" }}>score</div>
-                          </div>
-                        </div>
-                        <button onClick={() => { setTicker(r.code + " " + r.name); analyze(r.code + " " + r.name); }}
-                          style={{ background: "rgba(77,184,255,0.08)", border: "1px solid rgba(77,184,255,0.3)", borderRadius: 8, padding: "9px 14px", color: "#4db8ff", fontSize: 12, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap", fontFamily: "inherit" }}>
-                          🔬 詳細分析
-                        </button>
-                      </div>
-
-                      {/* MA情報 */}
-                      {r.perfect_order && (
-                        <div style={{ background: "rgba(255,215,0,0.06)", border: "1px solid rgba(255,215,0,0.2)", borderRadius: 6, padding: "6px 10px", marginBottom: 8, fontSize: 11, color: "#ffd700" }}>
-                          🏆 MA5({r.ma5}) &gt; MA25({r.ma25}) &gt; MA75({r.ma75}) &gt; MA200({r.ma200})
-                        </div>
-                      )}
-
-                      <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 8 }}>
-                        {(r.patterns||[]).map(p => (
-                          <span key={p.key} style={{ fontSize: 11, padding: "4px 10px", borderRadius: 6, fontWeight: 700, background: "rgba(0,229,160,0.08)", border: "1px solid rgba(0,229,160,0.35)", color: "#00e5a0" }}>{p.emoji} {p.label}</span>
-                        ))}
-                      </div>
-                      <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-                        <span style={{ fontSize: 11, padding: "3px 9px", borderRadius: 5, border: "1px solid #30363d", color: r.rsi <= 45 ? "#00e5a0" : r.rsi <= 63 ? "#ffd166" : "#ff6b6b" }}>RSI {r.rsi}</span>
-                        <span style={{ fontSize: 11, padding: "3px 9px", borderRadius: 5, background: "rgba(107,114,128,0.08)", border: "1px solid #30363d", color: "#8b949e" }}>¥{r.close?.toLocaleString()}</span>
-                      </div>
-                    </div>
-                  ))}
+              {filteredResults.length>0&&!sLoading && (
+                <div style={{display:"flex",flexDirection:"column",gap:10}}>
+                  <div style={{fontSize:13,color:"#00e5a0",fontWeight:700,marginBottom:4}}>✅ {filteredResults.length}銘柄検出 — スコア順</div>
+                  {filteredResults.map(r=><SignalCard key={r.code} r={r} onAnalyze={analyze}/>)}
                 </div>
               )}
 
-              {!sLoading && sResult.length === 0 && !sError && sStatus === "" && (
-                <div style={{ textAlign: "center", padding: "48px", color: "#6e7681", fontSize: 14 }}>
-                  👆 モードを選んでスキャン開始<br />
-                  <span style={{ fontSize: 12, color: "#4db8ff" }}>{jqStatus === "ok" ? "✅ J-Quants接続済 — 高精度スキャン可能" : "⚠️ J-Quants未接続 — 設定でAPIキーを入力すると精度が上がります"}</span>
+              {!sLoading&&sResult.length===0&&!sError&&sStatus==="" && (
+                <div style={{textAlign:"center",padding:"48px",color:"#6e7681",fontSize:14}}>
+                  👆 モードと対象を選んでスキャン開始<br/>
+                  <span style={{fontSize:12,color:jqStatus==="ok"?"#4db8ff":"#6e7681"}}>
+                    {jqStatus==="ok"?"✅ J-Quants接続済 — 業種別全銘柄スキャン可能":"⚠️ J-Quants未設定 — ⚙️設定からAPIキーを入力すると業種スキャンが使えます"}
+                  </span>
                 </div>
               )}
-              {!sLoading && sResult.length === 0 && !sError && sStatus !== "" && (
-                <div style={{ background: "rgba(255,209,102,0.06)", border: "1px solid rgba(255,209,102,0.3)", borderRadius: 14, padding: 28, textAlign: "center" }}>
-                  <div style={{ fontSize: 32, marginBottom: 12 }}>🔍</div>
-                  <div style={{ fontSize: 14, color: "#ffd166", fontWeight: 700 }}>現時点で条件を満たす銘柄はゼロでした</div>
-                  <div style={{ fontSize: 11, color: "#6e7681", marginTop: 8 }}>{sStatus}</div>
+              {!sLoading&&sResult.length===0&&!sError&&sStatus!=="" && (
+                <div style={{background:"rgba(255,209,102,0.06)",border:"1px solid rgba(255,209,102,0.3)",borderRadius:14,padding:28,textAlign:"center"}}>
+                  <div style={{fontSize:32,marginBottom:12}}>🔍</div>
+                  <div style={{fontSize:14,color:"#ffd166",fontWeight:700}}>現時点で条件を満たす銘柄はゼロでした</div>
+                  <div style={{fontSize:11,color:"#6e7681",marginTop:8}}>{sStatus}</div>
                 </div>
               )}
             </div>
