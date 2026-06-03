@@ -1,88 +1,76 @@
-// pages/api/sector-scan.js — デバッグ版
+// pages/api/sector-scan.js
+// 業種別の銘柄コード取得のみ（実スキャンは ssignal 側でバッチ処理）
+// J-Quants v2 仕様に対応（2026-06 公式スペック確認済み）
+//   - エンドポイント : GET https://api.jquants.com/v2/equities/master
+//   - 認証          : x-api-key ヘッダ
+//   - レスポンス     : { "data": [...], "pagination_key": "..." }
+//   - カラム名(省略形): Code(5桁) / CoName / S33(33業種) / S33Nm / Mkt(市場)
+
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).end();
-  const { apiKey, sectors } = req.body;
-  if (!apiKey) return res.status(400).json({ error: "APIキーが必要です" });
+
+  const { apiKey, sectors } = req.body || {};
+  if (!apiKey) return res.status(400).json({ ok: false, error: "APIキーが必要です" });
 
   try {
     const headers = { "x-api-key": apiKey };
 
-    // 銘柄マスター取得（デバッグ：生レスポンスのキーを確認）
-    const r = await fetch("https://api.jquants.com/v2/equities/master", {
-      headers, signal: AbortSignal.timeout(8000)
-    });
-    if (!r.ok) {
-      return res.status(200).json({ ok: false, error: `HTTP ${r.status}`, status: r.status });
-    }
-    const json = await r.json();
+    // 上場銘柄マスター取得（data 配列 + pagination_key をたどる）
+    let all = [];
+    let pageKey = null;
 
-    // レスポンスのキーを確認
-    const keys = Object.keys(json);
-    const firstKey = keys[0];
-    const rawStocks = json[firstKey];
-    const count = Array.isArray(rawStocks) ? rawStocks.length : 0;
-    const sample = Array.isArray(rawStocks) && rawStocks.length > 0 ? rawStocks[0] : null;
-
-    // すべてのキーを試してコードを抽出
-    let allStocks = [];
-    for (const key of keys) {
-      if (Array.isArray(json[key]) && json[key].length > 0) {
-        allStocks = json[key];
-        break;
+    do {
+      const url = pageKey
+        ? `https://api.jquants.com/v2/equities/master?pagination_key=${encodeURIComponent(pageKey)}`
+        : `https://api.jquants.com/v2/equities/master`;
+      const r = await fetch(url, { headers, signal: AbortSignal.timeout(8000) });
+      if (!r.ok) {
+        const body = await r.text().catch(() => "");
+        return res.status(200).json({
+          ok: false,
+          error: `マスター取得失敗 HTTP${r.status} ${body.slice(0, 120)}`,
+        });
       }
+      const json = await r.json();
+      const rows = Array.isArray(json.data) ? json.data : []; // ← V2は data 配列
+      all = all.concat(rows);
+      pageKey = json.pagination_key ?? null;
+    } while (pageKey);
+
+    if (all.length === 0) {
+      return res.status(200).json({ ok: false, error: "マスターが空でした（data配列が0件）" });
     }
 
-    // コード抽出（5桁コードの最初4桁を使用）
+    // 業種フィルタ（V2の33業種コードは S33）
+    const targets = sectors && sectors.length ? sectors : ["all"];
+    const useAll = targets.includes("all");
+    const targetSet = new Set(targets.map(String));
+
     const codeMap = {};
-    allStocks.forEach(s => {
-      // v2のフィールド名候補を全部試す
-      const rawCode = s.Code ?? s.code ?? s.SecurityCode ?? s.securityCode ?? "";
-      const code = String(rawCode).slice(0, 4);
-      if (/^\d{4}$/.test(code)) {
-        const name = s.CompanyName ?? s.companyName ?? s.Name ?? s.name ?? code;
-        codeMap[code] = name;
-      }
-    });
+    for (const s of all) {
+      const s33 = String(s.S33 ?? "");
+      if (!useAll && !targetSet.has(s33)) continue;
 
-    // 業種フィルタ
-    const targetSectors = sectors || ["all"];
-    let filteredMap = codeMap;
+      // V2のCodeは5桁（例 "86970"）。表示用の4桁は先頭4文字。
+      // 英数字コード（例 "285A0" → "285A"）も拾えるよう英大文字も許可。
+      const code = String(s.Code ?? "").slice(0, 4);
+      if (!/^[0-9A-Z]{4}$/.test(code)) continue;
 
-    if (!targetSectors.includes("all")) {
-      const sectorFiltered = allStocks.filter(s => {
-        const sc = String(s.Sector33Code ?? s.sector33Code ?? s.SectorCode ?? "");
-        return targetSectors.includes(sc);
-      });
-      filteredMap = {};
-      sectorFiltered.forEach(s => {
-        const rawCode = s.Code ?? s.code ?? s.SecurityCode ?? "";
-        const code = String(rawCode).slice(0, 4);
-        if (/^\d{4}$/.test(code)) {
-          filteredMap[code] = s.CompanyName ?? s.companyName ?? code;
-        }
-      });
+      codeMap[code] = s.CoName ?? "";
     }
 
-    const codes = Object.keys(filteredMap);
-
+    const codes = Object.keys(codeMap);
     return res.status(200).json({
       ok: true,
+      count: codes.length, // ← 取得できたコード数（動作確認用）
       codes,
-      codeMap: filteredMap,
-      total: codes.length,
-      message: `${codes.length}銘柄を取得しました`,
-      // デバッグ情報
-      debug: {
-        responseKeys: keys,
-        firstKey,
-        totalInResponse: count,
-        sampleFields: sample ? Object.keys(sample) : [],
-        sampleData: sample,
-        paginationKey: json.pagination_key ?? null,
-      }
+      codeMap,
     });
-
   } catch (e) {
-    return res.status(200).json({ ok: false, error: e.message });
+    const msg =
+      e?.name === "TimeoutError"
+        ? "マスター取得タイムアウト（8秒）"
+        : e?.message || "不明なエラー";
+    return res.status(200).json({ ok: false, error: msg });
   }
 }
