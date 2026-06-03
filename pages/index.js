@@ -374,22 +374,50 @@ export default function Home() {
   async function startScan() {
     setSLoading(true); setSResult([]); setSError(null);
 
-    // 業種スキャン（J-Quants必須）
+    // 業種スキャン（2ステップ：コード取得→ssignalでバッチスキャン）
     if (scanTarget === "sector") {
       if (!jqApiKey) { setSError("業種スキャンにはJ-QuantsのAPIキー設定が必要です。右上⚙️設定から接続してください。"); setSLoading(false); return; }
-      setSectorLoading(true);
       try {
-        setSStatus("銘柄マスターを取得中...");
-        const res = await fetch("/api/sector-scan", {
+        // Step1: 業種フィルタで銘柄コード取得
+        setSStatus("📡 銘柄マスターを取得中...");
+        const masterRes = await fetch("/api/sector-scan", {
           method:"POST", headers:{"Content-Type":"application/json"},
-          body: JSON.stringify({ apiKey: jqApiKey, sectors: selectedSectors, signalMode }),
+          body: JSON.stringify({ apiKey: jqApiKey, sectors: selectedSectors }),
         });
-        const data = await res.json();
-        if (!data.ok) { setSError(data.error||"スキャン失敗"); return; }
-        setSResult(data.results||[]);
-        setSStatus(data.message||"完了");
+        const masterData = await masterRes.json();
+        if (!masterData.ok) { setSError(masterData.error||"銘柄マスター取得失敗"); setSLoading(false); return; }
+
+        const codes = masterData.codes || [];
+        if (codes.length === 0) { setSError("対象銘柄が見つかりませんでした"); setSLoading(false); return; }
+        setSStatus(`✅ ${codes.length}銘柄を取得。スキャン開始...`);
+
+        // Step2: ssignalでバッチスキャン（10銘柄ずつ）
+        const CHUNK = 10;
+        const all = [];
+        for (let i=0; i<codes.length; i+=CHUNK) {
+          const chunk = codes.slice(i, i+CHUNK);
+          setSStatus(`スキャン中... (${Math.min(i+CHUNK, codes.length)}/${codes.length}銘柄)`);
+          try {
+            const res = await fetch("/api/ssignal", {
+              method:"POST", headers:{"Content-Type":"application/json"},
+              body: JSON.stringify({ codes: chunk, apiKey: jqApiKey, mode: signalMode }),
+            });
+            if (res.ok) {
+              const data = await res.json();
+              // 銘柄名をmasterDataのcodeMapで補完
+              const results = (data.results||[]).map(r => ({
+                ...r,
+                name: r.name || masterData.codeMap?.[r.code] || r.code,
+              }));
+              all.push(...results);
+            }
+          } catch(_) {}
+        }
+        all.sort((a,b)=>b.score-a.score);
+        setSResult(all);
+        setSStatus(all.length===0?`${codes.length}銘柄スキャン完了 — 条件を満たす銘柄なし`:`完了！ ${codes.length}銘柄中 ${all.length}銘柄検出`);
       } catch(e) { setSError(e.message); }
-      finally { setSLoading(false); setSectorLoading(false); }
+      finally { setSLoading(false); }
       return;
     }
 
