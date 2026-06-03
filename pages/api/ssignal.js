@@ -72,7 +72,7 @@ async function fetchFromJQuants(code, apiKey) {
       }
     }
 
-    if (allQuotes.length < 15) return null;
+    if (allQuotes.length < 5) return null;
     return allQuotes
       .sort((a, b) => (a.Date ?? a.date ?? "").localeCompare(b.Date ?? b.date ?? ""))
       .map(q => ({
