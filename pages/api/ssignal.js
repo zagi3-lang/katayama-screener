@@ -1,299 +1,229 @@
-// pages/api/ssignal.js
+// pages/api/ssignal.js — J-Quants v2対応 + パーフェクトオーダー + Sシグナル複合スクリーナー
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
-  const { codes } = req.body;
+
+  const { codes, apiKey, mode } = req.body;
   if (!codes || !Array.isArray(codes) || codes.length === 0) {
     return res.status(400).json({ error: "codesが必要です" });
   }
 
   const results = [];
-  const debug   = { fetched: 0, failed: 0, no_signal: 0 };
+  const debug = { fetched: 0, failed: 0, no_signal: 0 };
 
-  for (const code of codes.slice(0, 60)) {
+  // J-Quantsのデータ取得日付範囲（200日分）
+  const today = new Date();
+  const dow = today.getDay();
+  if (dow === 0) today.setDate(today.getDate() - 2);
+  if (dow === 6) today.setDate(today.getDate() - 1);
+  const toStr   = today.toISOString().slice(0, 10);
+  const fromStr = new Date(Date.now() - 210 * 86400000).toISOString().slice(0, 10);
+
+  for (const code of codes) {
     try {
-      const data = await fetchOHLCV(code);
-      if (!data || data.length < 20) { debug.failed++; continue; }
+      let data = null;
+
+      // J-QuantsのAPIキーがあればJ-Quantsを優先使用
+      if (apiKey) {
+        data = await fetchFromJQuants(code, apiKey, fromStr, toStr);
+      }
+
+      // フォールバック: stooq.com
+      if (!data || data.length < 30) {
+        data = await fetchFromStooq(code);
+      }
+
+      if (!data || data.length < 30) { debug.failed++; continue; }
       debug.fetched++;
-      const signal = calcAllSignals(data);
+
+      const signal = calcSignals(data, mode);
       if (signal.patterns.length > 0) {
         results.push({
           code,
-          name:          signal.name || code,
-          rsi:           signal.rsi,
-          price_chg_pct: signal.price_chg_pct,
-          s_count:       signal.s_count,
-          close:         signal.close,
-          ma25:          signal.ma25,
-          patterns:      signal.patterns,   // 点灯パターン一覧
-          score:         signal.score,      // 複合スコア
+          name:     signal.name || code,
+          rsi:      signal.rsi,
+          s_count:  signal.s_count,
+          close:    signal.close,
+          ma5:      signal.ma5,
+          ma25:     signal.ma25,
+          ma75:     signal.ma75,
+          ma200:    signal.ma200,
+          patterns: signal.patterns,
+          score:    signal.score,
+          perfect_order: signal.perfect_order,
         });
       } else { debug.no_signal++; }
     } catch (e) { debug.failed++; }
   }
 
-  // スコア順ソート
   results.sort((a, b) => b.score - a.score);
   return res.status(200).json({ results, debug, total: codes.length });
 }
 
-async function fetchOHLCV(code) {
-  const num = code.replace(/[^0-9]/g, "");
-
-  // stooq.com
+// ── J-Quantsからデータ取得 ──
+async function fetchFromJQuants(code, apiKey, from, to) {
   try {
-    const url = `https://stooq.com/q/d/l/?s=${num}.jp&i=d`;
-    const r = await fetch(url, { headers: { "User-Agent": "Mozilla/5.0" }, signal: AbortSignal.timeout(8000) });
-    if (r.ok) {
-      const text = await r.text();
-      const lines = text.trim().split("\n").slice(1);
-      if (lines.length >= 20) {
-        const bars = lines.map(line => {
-          const [date, open, high, low, close, volume] = line.split(",");
-          const c = parseFloat(close), v = parseInt(volume) || 100000;
-          if (!c || isNaN(c)) return null;
-          return { date: new Date(date), open: parseFloat(open)||c, high: parseFloat(high)||c, low: parseFloat(low)||c, close: c, volume: v, name: num };
-        }).filter(Boolean);
-        if (bars.length >= 20) return bars;
-      }
-    }
-  } catch (_) {}
-
-  // Yahoo Finance v7 CSV
-  try {
-    const ticker = num + ".T";
-    const now = Math.floor(Date.now() / 1000);
-    const url = `https://query2.finance.yahoo.com/v7/finance/download/${ticker}?period1=${now-7776000}&period2=${now}&interval=1d&events=history`;
-    const r = await fetch(url, { headers: { "User-Agent": "Mozilla/5.0", "Referer": "https://finance.yahoo.com/" }, signal: AbortSignal.timeout(8000) });
-    if (r.ok) {
-      const bars = (await r.text()).trim().split("\n").slice(1).map(line => {
-        const [date,,,,close,,volume] = line.split(",");
-        const c = parseFloat(close), v = parseInt(volume)||100000;
-        if (!c || isNaN(c)) return null;
-        return { date: new Date(date), open: c, high: c, low: c, close: c, volume: v, name: ticker };
-      }).filter(Boolean);
-      if (bars.length >= 20) return bars;
-    }
-  } catch (_) {}
-
-  // Yahoo Finance v8 JSON
-  try {
-    const ticker = num + ".T";
-    const r = await fetch(`https://query2.finance.yahoo.com/v8/finance/chart/${ticker}?interval=1d&range=3mo`, {
-      headers: { "User-Agent": "Mozilla/5.0", "Referer": "https://finance.yahoo.com/" }, signal: AbortSignal.timeout(8000)
+    const url = `https://api.jquants.com/v2/equities/bars/daily?code=${code}&from=${from}&to=${to}`;
+    const r = await fetch(url, {
+      headers: { "x-api-key": apiKey },
+      signal: AbortSignal.timeout(10000),
     });
-    if (r.ok) {
-      const json = await r.json();
-      const chart = json?.chart?.result?.[0];
-      if (chart) {
-        const ts = chart.timestamp || [];
-        const q  = chart.indicators?.quote?.[0] || {};
-        const name = chart.meta?.shortName || ticker;
-        const bars = ts.map((t,i) => ({
-          date: new Date(t*1000), open: q.open?.[i]||0, high: q.high?.[i]||0,
-          low: q.low?.[i]||0, close: q.close?.[i]||0, volume: q.volume?.[i]||100000, name
-        })).filter(b => b.close > 0);
-        if (bars.length >= 20) return bars;
-      }
-    }
-  } catch (_) {}
-
-  return null;
+    if (!r.ok) return null;
+    const json = await r.json();
+    const quotes = json.daily_quotes ?? json.bars ?? [];
+    if (quotes.length < 30) return null;
+    return quotes.map(q => ({
+      date:   q.Date ?? q.date,
+      open:   parseFloat(q.Open  ?? q.O ?? q.open  ?? 0),
+      high:   parseFloat(q.High  ?? q.H ?? q.high  ?? 0),
+      low:    parseFloat(q.Low   ?? q.L ?? q.low   ?? 0),
+      close:  parseFloat(q.Close ?? q.C ?? q.close ?? 0),
+      volume: parseFloat(q.Volume ?? q.Vo ?? q.volume ?? 0),
+    })).filter(q => q.close > 0);
+  } catch { return null; }
 }
 
-// ═══════════════════════════════════════════════════
-// 全パターン判定
-// ═══════════════════════════════════════════════════
-function calcAllSignals(bars) {
-  const n      = bars.length;
-  const name   = bars[0].name || "";
-  const closes = bars.map(b => b.close);
-  const volumes= bars.map(b => b.volume);
-  const opens  = bars.map(b => b.open);
-  const highs  = bars.map(b => b.high);
-  const lows   = bars.map(b => b.low);
+// ── stooq.comからフォールバック取得 ──
+async function fetchFromStooq(code) {
+  try {
+    const num = code.replace(/[^0-9]/g, "");
+    const url = `https://stooq.com/q/d/l/?s=${num}.jp&i=d`;
+    const r = await fetch(url, {
+      headers: { "User-Agent": "Mozilla/5.0" },
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!r.ok) return null;
+    const text = await r.text();
+    const lines = text.trim().split("\n").slice(1);
+    if (lines.length < 30) return null;
+    return lines.map(line => {
+      const [date, open, high, low, close, volume] = line.split(",");
+      return {
+        date, open: +open, high: +high, low: +low,
+        close: +close, volume: +volume || 0,
+      };
+    }).filter(q => q.close > 0);
+  } catch { return null; }
+}
 
-  // 基本指標
-  const obv      = calcOBV(closes, volumes);
-  const ma5arr   = sma(closes, Math.min(5, n-1));
-  const ma25arr  = sma(closes, Math.min(25, n-1));
-  const ma75arr  = sma(closes, Math.min(75, n-1));
-  const rsi14arr = rsi(closes, Math.min(14, n-1));
-  const vol20    = sma(volumes, Math.min(20, n-1));
+// ── シグナル計算（パーフェクトオーダー + Sシグナル） ──
+function calcSignals(data, mode) {
+  const n = data.length;
+  const closes  = data.map(d => d.close);
+  const volumes = data.map(d => d.volume);
 
-  const i      = n - 1;
-  const close  = closes[i];
-  const ma5v   = ma5arr[i]   || close;
-  const ma25v  = ma25arr[i]  || close;
-  const ma75v  = ma75arr[i]  || close;
-  const rsiVal = rsi14arr[i] || 50;
-  const avgVol = vol20[i]    || 1;
-  const vol    = volumes[i];
+  // ── MA計算 ──
+  const ma = (arr, period) => {
+    if (arr.length < period) return null;
+    return arr.slice(-period).reduce((a, b) => a + b, 0) / period;
+  };
+  const ma5   = ma(closes, 5);
+  const ma25  = ma(closes, 25);
+  const ma75  = ma(closes, Math.min(75,  n));
+  const ma200 = ma(closes, Math.min(200, n));
 
+  // ── パーフェクトオーダー判定 ──
+  const perfect_order = ma5 && ma25 && ma75 && ma200
+    ? (ma5 > ma25 && ma25 > ma75 && ma75 > ma200)
+    : false;
+
+  // ── MA上向き判定（各MA5日前と比較） ──
+  const maUpward = (arr, period) => {
+    if (arr.length < period + 5) return false;
+    const cur  = arr.slice(-period).reduce((a,b)=>a+b,0) / period;
+    const prev = arr.slice(-period-5, -5).reduce((a,b)=>a+b,0) / period;
+    return cur > prev;
+  };
+  const ma5up   = maUpward(closes, 5);
+  const ma25up  = maUpward(closes, 25);
+  const ma75up  = n >= 80  ? maUpward(closes, 75)  : false;
+  const ma200up = n >= 205 ? maUpward(closes, 200) : false;
+
+  // ── OBV計算 ──
+  let obv = 0;
+  const obvArr = [0];
+  for (let i = 1; i < n; i++) {
+    if (closes[i] > closes[i-1])      obv += volumes[i];
+    else if (closes[i] < closes[i-1]) obv -= volumes[i];
+    obvArr.push(obv);
+  }
+  const obvRecent = obvArr.slice(-10);
+  const obvPrev   = obvArr.slice(-20, -10);
+  const obvRising = obvRecent[9] > obvPrev[0] * 1.02;
+
+  // ── RSI計算（14日） ──
+  let gains = 0, losses = 0;
+  for (let i = n - 14; i < n; i++) {
+    const diff = closes[i] - closes[i-1];
+    if (diff > 0) gains += diff; else losses -= diff;
+  }
+  const rsi = gains + losses === 0 ? 50 : Math.round(100 * gains / (gains + losses));
+
+  // ── 株価横ばい判定（直近10日の変動幅が5%以内） ──
+  const recent10 = closes.slice(-10);
+  const priceFlat = (Math.max(...recent10) - Math.min(...recent10)) / Math.min(...recent10) < 0.05;
+
+  // ── 出来高急増判定 ──
+  const vol5  = volumes.slice(-5).reduce((a,b)=>a+b,0) / 5;
+  const vol20 = volumes.slice(-20).reduce((a,b)=>a+b,0) / 20;
+  const volSurge = vol5 > vol20 * 1.5;
+
+  // ── 株価位置（52週高値比） ──
+  const high52 = Math.max(...closes.slice(-Math.min(252, n)));
+  const pricePosition = closes[n-1] / high52;
+
+  const close = Math.round(closes[n-1]);
   const patterns = [];
   let score = 0;
 
-  // ─────────────────────────────────────────────
-  // 1) Sシグナル（OBV先行×株価横ばい）
-  // ─────────────────────────────────────────────
-  const obv_slope   = linregSlope(obv.slice(Math.max(0,i-14), i+1));
-  const obv_norm    = avgVol > 0 ? obv_slope / avgVol : 0;
-  const price_chg   = Math.abs(close - closes[Math.max(0,i-15)]) / (closes[Math.max(0,i-15)]||1) * 100;
-  const last20      = bars.slice(-20);
-  const bull_vol    = last20.filter(b=>b.close>=b.open).reduce((s,b)=>s+b.volume,0);
-  const bull_cnt    = last20.filter(b=>b.close>=b.open).length;
-  const bear_vol    = last20.filter(b=>b.close< b.open).reduce((s,b)=>s+b.volume,0);
-  const bear_cnt    = last20.filter(b=>b.close< b.open).length;
-  const avg_bull    = bull_cnt>0 ? bull_vol/bull_cnt : 0;
-  const avg_bear    = bear_cnt>0 ? bear_vol/bear_cnt : 1;
-  const bullish_ok  = avg_bull > avg_bear * 1.2;
-  const spike_th    = 2.0;
-  const spike_count = last20.filter(b=>b.volume>avgVol*spike_th).length;
-  const multi_ok    = spike_count >= 2;
+  // ── パターン判定 ──
 
-  const s61 = obv_norm>0 && price_chg<5.0 && rsiVal>=45 && rsiVal<=63 && close>ma25v && bullish_ok && multi_ok;
-  const obv_3up = n>=3 && obv[i]>obv[i-1] && obv[i-1]>obv[i-2];
-  const body    = Math.abs(close - opens[i]);
-  const bsafe   = body>0 ? body : (highs[i]-lows[i])*0.01 || 1;
-  const uw      = highs[i] - Math.max(close, opens[i]);
-  const longup  = uw/bsafe > 0.5;
-  const sv3 = vol>avgVol*1.1 && vol<avgVol*spike_th && obv_3up && rsiVal>=48 && rsiVal<=63 && close>ma25v && close>opens[i] && !longup;
-
-  // S点灯カウント
-  let s_count = 0;
-  for (let j=Math.max(0,i-14); j<=i; j++) {
-    const c_j=closes[j], ma_j=ma25arr[j]||closes[j], rsi_j=rsi14arr[j]||50;
-    const v_j=volumes[j], avg_j=vol20[j]||1, o_j=opens[j];
-    const slp_j=linregSlope(obv.slice(Math.max(0,j-14),j+1));
-    const nrm_j=avg_j>0?slp_j/avg_j:0;
-    const pch_j=j>=15?Math.abs(c_j-closes[j-15])/(closes[j-15]||1)*100:10;
-    const s61_j=nrm_j>0&&pch_j<5.0&&rsi_j>=45&&rsi_j<=63&&c_j>ma_j;
-    const o3_j=j>=2&&obv[j]>obv[j-1]&&obv[j-1]>obv[j-2];
-    const sv3_j=v_j>avg_j*1.1&&v_j<avg_j*spike_th&&o3_j&&rsi_j>=48&&rsi_j<=63&&c_j>ma_j&&c_j>o_j;
-    if (s61_j||sv3_j) s_count++;
+  // ① パーフェクトオーダー（最重要）
+  if (perfect_order) {
+    patterns.push({ key: "PO", emoji: "🏆", label: "パーフェクトオーダー", detail: `MA5>${Math.round(ma5)} MA25>${Math.round(ma25)} MA75>${Math.round(ma75)}` });
+    score += 40;
   }
 
-  if (s61 || sv3) {
-    patterns.push({ key: "S", label: "S 仕込み気配", emoji: "💎", detail: `OBV先行上昇×横ばい RSI${rsiVal.toFixed(0)}` });
-    score += s_count >= 3 ? 30 : 20;
+  // ② Sシグナル（仕込み感）= OBV上昇×株価横ばい×RSI適正帯
+  const sSignal = obvRising && priceFlat && rsi >= 40 && rsi <= 65;
+  if (sSignal) {
+    patterns.push({ key: "S", emoji: "💎", label: "仕込みS", detail: `OBV↑×横ばい×RSI${rsi}` });
+    score += 30;
   }
 
-  // ─────────────────────────────────────────────
-  // 2) OBVダイバージェンス（株価↓なのにOBV↑）
-  // ─────────────────────────────────────────────
-  if (n >= 20) {
-    const price_slope_20 = linregSlope(closes.slice(-20));
-    const obv_slope_20   = linregSlope(obv.slice(-20));
-    const price_slope_10 = linregSlope(closes.slice(-10));
-    const obv_slope_10   = linregSlope(obv.slice(-10));
-
-    // 株価が下降/横ばいなのにOBVが上昇
-    const div_ok = (price_slope_20 < 0 || price_slope_10 < 0) && obv_slope_20 > 0 && obv_slope_10 > 0;
-    if (div_ok && rsiVal >= 35 && rsiVal <= 65) {
-      patterns.push({ key: "DIV", label: "OBVダイバージェンス", emoji: "📡", detail: `株価↓OBV↑ RSI${rsiVal.toFixed(0)}` });
-      score += 25;
-    }
+  // ③ OBVダイバージェンス単体
+  if (obvRising && !priceFlat) {
+    patterns.push({ key: "DIV", emoji: "📡", label: "OBVダイバージェンス", detail: "OBV先行上昇" });
+    score += 10;
   }
 
-  // ─────────────────────────────────────────────
-  // 3) 出来高急増＋陽線（強シグナル）
-  // ─────────────────────────────────────────────
-  const is_bull_today = close > opens[i];
-  const vol_spike     = vol > avgVol * 1.8;   // 1.8倍以上
-  const strong_close  = (close - lows[i]) / ((highs[i]-lows[i])||1) > 0.6; // 高値圏引け
-  const above_ma25    = close > ma25v;
-
-  if (is_bull_today && vol_spike && strong_close && above_ma25 && rsiVal >= 45 && rsiVal <= 75) {
-    patterns.push({ key: "VOL", label: "出来高急増＋陽線", emoji: "🔥", detail: `出来高${(vol/avgVol).toFixed(1)}倍 RSI${rsiVal.toFixed(0)}` });
-    score += 22;
+  // ④ 出来高急増
+  if (volSurge) {
+    patterns.push({ key: "VOL", emoji: "🔥", label: "出来高急増", detail: `直近5日平均 ${(vol5/vol20).toFixed(1)}x` });
+    score += 10;
   }
 
-  // ─────────────────────────────────────────────
-  // 4) MA収束パターン（パーフェクトオーダー直前）
-  // ─────────────────────────────────────────────
-  if (n >= 75) {
-    // MAが収束している（差が小さい）かつ上向きに並び始めている
-    const ma5_above_ma25  = ma5v > ma25v;
-    const ma25_near_ma75  = Math.abs(ma25v - ma75v) / ma75v < 0.03; // 3%以内
-    const ma25_slope      = ma25arr[i] - (ma25arr[Math.max(0,i-5)]||ma25arr[i]);
-    const ma75_slope      = ma75arr[i] - (ma75arr[Math.max(0,i-10)]||ma75arr[i]);
-    const converging      = ma5_above_ma25 && ma25_near_ma75 && ma25_slope > 0;
-    const price_above_all = close > ma5v && close > ma25v;
-
-    if (converging && price_above_all && rsiVal >= 45 && rsiVal <= 70) {
-      patterns.push({ key: "MA", label: "MA収束（PO直前）", emoji: "📐", detail: `MA5>MA25≈MA75 RSI${rsiVal.toFixed(0)}` });
-      score += 20;
-    }
+  // ⑤ MA収束（上向き揃い）
+  if (ma5up && ma25up) {
+    patterns.push({ key: "MA", emoji: "📐", label: "MA収束", detail: "MA5・MA25上向き" });
+    score += 10;
   }
 
-  // ─────────────────────────────────────────────
-  // 5) RSIボトム反転（30付近から上昇転換）
-  // ─────────────────────────────────────────────
-  if (n >= 10) {
-    const rsi_5ago   = rsi14arr[Math.max(0,i-5)] || 50;
-    const rsi_3ago   = rsi14arr[Math.max(0,i-3)] || 50;
-    const rsi_bottom = Math.min(...rsi14arr.slice(-10).filter(v=>v!==null&&v!==50));
-
-    // 直近10日でRSI30以下まで到達し、今は回復してきた
-    const was_oversold   = rsi_bottom <= 33;
-    const now_recovering = rsiVal > rsi_3ago && rsiVal > rsi_5ago;
-    const rsi_rising     = rsiVal >= 35 && rsiVal <= 55;
-    const price_holding  = close > ma25v * 0.97; // MA25の3%以内
-
-    if (was_oversold && now_recovering && rsi_rising && price_holding) {
-      patterns.push({ key: "RSI", label: "RSIボトム反転", emoji: "🔄", detail: `RSI底${rsi_bottom.toFixed(0)}→現在${rsiVal.toFixed(0)}` });
-      score += 18;
-    }
+  // ⑥ RSI反転ゾーン
+  if (rsi >= 30 && rsi <= 45) {
+    patterns.push({ key: "RSI", emoji: "🔄", label: "RSI反転", detail: `RSI${rsi}（売られ過ぎ圏）` });
+    score += 5;
   }
 
-  // 複数パターン重複ボーナス
-  if (patterns.length >= 2) score += 10;
-  if (patterns.length >= 3) score += 15;
+  // モードフィルター
+  if (mode === "perfect_order_only" && !perfect_order) return { patterns: [] };
+  if (mode === "s_signal_only"      && !sSignal)       return { patterns: [] };
+  if (mode === "po_and_s"           && !(perfect_order && sSignal)) return { patterns: [] };
 
   return {
-    fired: patterns.length > 0,
-    name, rsi: Math.round(rsiVal*10)/10,
-    price_chg_pct: Math.round(price_chg*10)/10,
-    s_count, close, ma25: Math.round(ma25v),
-    patterns, score,
+    close, rsi, ma5: Math.round(ma5 ?? 0), ma25: Math.round(ma25 ?? 0),
+    ma75: Math.round(ma75 ?? 0), ma200: Math.round(ma200 ?? 0),
+    perfect_order, patterns, score,
+    s_count: patterns.filter(p => p.key === "S").length,
+    name: "",
   };
-}
-
-// ═══ ユーティリティ ═══
-
-function calcOBV(closes, volumes) {
-  const obv = [0];
-  for (let i=1; i<closes.length; i++) {
-    const sign = closes[i]>closes[i-1]?1:closes[i]<closes[i-1]?-1:0;
-    obv.push(obv[i-1]+sign*volumes[i]);
-  }
-  return obv;
-}
-
-function sma(arr, period) {
-  const result = new Array(arr.length).fill(null);
-  for (let i=period-1; i<arr.length; i++) result[i]=arr.slice(i-period+1,i+1).reduce((a,b)=>a+b,0)/period;
-  return result;
-}
-
-function rsi(closes, period=14) {
-  const result = new Array(closes.length).fill(50);
-  let gains=0, losses=0;
-  for (let i=1; i<=period&&i<closes.length; i++) { const d=closes[i]-closes[i-1]; if(d>0)gains+=d; else losses-=d; }
-  let ag=gains/period, al=losses/period;
-  if (period<closes.length) result[period]=al===0?100:100-100/(1+ag/al);
-  for (let i=period+1; i<closes.length; i++) {
-    const d=closes[i]-closes[i-1];
-    ag=(ag*(period-1)+Math.max(d,0))/period;
-    al=(al*(period-1)+Math.max(-d,0))/period;
-    result[i]=al===0?100:100-100/(1+ag/al);
-  }
-  return result;
-}
-
-function linregSlope(arr) {
-  const n=arr.length; if(n<2) return 0;
-  let sx=0,sy=0,sxy=0,sx2=0;
-  for(let i=0;i<n;i++){sx+=i;sy+=arr[i];sxy+=i*arr[i];sx2+=i*i;}
-  const d=n*sx2-sx*sx;
-  return d===0?0:(n*sxy-sx*sy)/d;
 }
