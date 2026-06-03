@@ -16,10 +16,10 @@ export default async function handler(req, res) {
       if (apiKey) {
         data = await fetchFromJQuants(code, apiKey);
       }
-      if (!data || data.length < 15) {
+      if (!data || data.length < 5) {
         data = await fetchFromStooq(code);
       }
-      if (!data || data.length < 15) { debug.failed++; continue; }
+      if (!data || data.length < 5) { debug.failed++; continue; }
 
       debug.fetched++;
       const signal = calcSignals(data, mode);
