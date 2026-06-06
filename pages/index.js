@@ -95,7 +95,77 @@ function scoreAvg(scores) {
   const vals = Object.values(scores || {}).map(Number).filter(n => !isNaN(n));
   return vals.length ? Math.round(vals.reduce((a, b) => a + b, 0) / vals.length * 10) / 10 : 0;
 }
+// 直近n営業日（土日のみ除外。祝日は market-bars 側で弾く）
+function getRecentTradingDays(n) {
+  const days = [];
+  const d = new Date();
+  while (days.length < n) {
+    d.setDate(d.getDate() - 1);
+    const dow = d.getDay();
+    if (dow === 0 || dow === 6) continue;
+    days.unshift(d.toISOString().slice(0, 10)); // 古い→新しい順
+  }
+  return days;
+}
 
+// クライアント側シグナル判定（ssignalのcalcSignalsを移植。series=[{c,v},...]昇順）
+function clientCalcSignals(series, mode) {
+  const n = series.length;
+  if (n < 5) return { patterns: [] };
+  const closes = series.map(d => d.c);
+  const volumes = series.map(d => d.v);
+  const ma = (arr, p) => (arr.length < p ? null : arr.slice(-p).reduce((a, b) => a + b, 0) / p);
+
+  const ma5 = ma(closes, 5);
+  const ma25 = ma(closes, Math.min(25, n));
+  const ma75 = ma(closes, Math.min(75, n));
+  const ma200 = ma(closes, Math.min(200, n));
+  const perfect_order = ma5 && ma25 && ma75 && ma200 ? (ma5 > ma25 && ma25 > ma75 && ma75 > ma200) : false;
+
+  let obv = 0; const obvArr = [0];
+  for (let i = 1; i < n; i++) {
+    if (closes[i] > closes[i - 1]) obv += volumes[i];
+    else if (closes[i] < closes[i - 1]) obv -= volumes[i];
+    obvArr.push(obv);
+  }
+  const obvRising = obvArr[n - 1] > obvArr[Math.max(0, n - 10)] * 1.01;
+
+  let gains = 0, losses = 0;
+  const rsiLen = Math.min(14, n - 1);
+  for (let i = n - rsiLen; i < n; i++) {
+    const diff = closes[i] - closes[i - 1];
+    if (diff > 0) gains += diff; else losses -= diff;
+  }
+  const rsi = gains + losses === 0 ? 50 : Math.round(100 * gains / (gains + losses));
+
+  const recent = closes.slice(-Math.min(10, n));
+  const priceFlat = (Math.max(...recent) - Math.min(...recent)) / Math.min(...recent) < 0.05;
+
+  const vol5 = volumes.slice(-5).reduce((a, b) => a + b, 0) / 5;
+  const vol20 = volumes.slice(-Math.min(20, n)).reduce((a, b) => a + b, 0) / Math.min(20, n);
+  const volSurge = vol20 > 0 && vol5 > vol20 * 1.5;
+
+  const close = Math.round(closes[n - 1]);
+  const patterns = []; let score = 0;
+  if (perfect_order) { patterns.push({ key: "PO", emoji: "🏆", label: "パーフェクトオーダー" }); score += 40; }
+  const sSignal = obvRising && priceFlat && rsi >= 40 && rsi <= 65;
+  if (sSignal) { patterns.push({ key: "S", emoji: "💎", label: "仕込みS" }); score += 30; }
+  if (obvRising && !priceFlat) { patterns.push({ key: "DIV", emoji: "📡", label: "OBVダイバージェンス" }); score += 10; }
+  if (volSurge) { patterns.push({ key: "VOL", emoji: "🔥", label: "出来高急増" }); score += 10; }
+  if (ma5 && ma25 && ma5 > ma25) { patterns.push({ key: "MA", emoji: "📐", label: "MA収束" }); score += 10; }
+  if (rsi >= 30 && rsi <= 45) { patterns.push({ key: "RSI", emoji: "🔄", label: "RSI反転" }); score += 5; }
+
+  if (mode === "po_only" && !perfect_order) return { patterns: [] };
+  if (mode === "s_only" && !sSignal) return { patterns: [] };
+  if (mode === "po_and_s" && !(perfect_order && sSignal)) return { patterns: [] };
+
+  return {
+    close, rsi,
+    ma5: Math.round(ma5 ?? 0), ma25: Math.round(ma25 ?? 0),
+    ma75: Math.round(ma75 ?? 0), ma200: Math.round(ma200 ?? 0),
+    perfect_order, patterns, score,
+  };
+}
 const F = { fontFamily: "'Hiragino Kaku Gothic ProN','Noto Sans JP','Yu Gothic',sans-serif" };
 
 function ScoreBar({ score }) {
@@ -374,49 +444,76 @@ export default function Home() {
   async function startScan() {
     setSLoading(true); setSResult([]); setSError(null);
 
-    // 業種スキャン（2ステップ：コード取得→ssignalでバッチスキャン）
+  
+    // 業種スキャン（date ベース：銘柄数に依存せず日数ぶんで全市場を取得）
     if (scanTarget === "sector") {
       if (!jqApiKey) { setSError("業種スキャンにはJ-QuantsのAPIキー設定が必要です。右上⚙️設定から接続してください。"); setSLoading(false); return; }
       try {
-        // Step1: 業種フィルタで銘柄コード取得
+        // Step1: 対象コード＋銘柄名を取得
         setSStatus("📡 銘柄マスターを取得中...");
         const masterRes = await fetch("/api/sector-scan", {
-          method:"POST", headers:{"Content-Type":"application/json"},
+          method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ apiKey: jqApiKey, sectors: selectedSectors }),
         });
         const masterData = await masterRes.json();
-        if (!masterData.ok) { setSError(masterData.error||"銘柄マスター取得失敗"); setSLoading(false); return; }
+        if (!masterData.ok) { setSError(masterData.error || "銘柄マスター取得失敗"); setSLoading(false); return; }
 
-        const codes = masterData.codes || [];
-        if (codes.length === 0) { setSError("対象銘柄が見つかりませんでした"); setSLoading(false); return; }
-        setSStatus(`✅ ${codes.length}銘柄を取得。スキャン開始...`);
+        const targetCodes = new Set(masterData.codes || []);
+        const codeMap = masterData.codeMap || {};
+        if (targetCodes.size === 0) { setSError("対象銘柄が見つかりませんでした"); setSLoading(false); return; }
 
-        // Step2: ssignalでバッチスキャン（10銘柄ずつ）
-        const CHUNK = 10;
-        const all = [];
-        for (let i=0; i<codes.length; i+=CHUNK) {
-          const chunk = codes.slice(i, i+CHUNK);
-          setSStatus(`スキャン中... (${Math.min(i+CHUNK, codes.length)}/${codes.length}銘柄)`);
-          try {
-            const res = await fetch("/api/ssignal", {
-              method:"POST", headers:{"Content-Type":"application/json"},
-              body: JSON.stringify({ codes: chunk, apiKey: jqApiKey, mode: signalMode }),
+        // Step2: 直近DAYS営業日ぶんの全市場日足を「日付ごと」に取得
+        const DAYS = 60; // 多いほどMA精度↑だがAPIコール↑（MA200には約200日必要）
+        const tradingDays = getRecentTradingDays(DAYS);
+        const seriesByCode = {};
+        let gotDays = 0;
+
+        for (let i = 0; i < tradingDays.length; i++) {
+          setSStatus(`📈 全市場の日足を取得中... (${i + 1}/${tradingDays.length}日)`);
+          let attempt = 0, done = false;
+          while (attempt < 2 && !done) {
+            attempt++;
+            const r = await fetch("/api/market-bars", {
+              method: "POST", headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ apiKey: jqApiKey, date: tradingDays[i] }),
             });
-            if (res.ok) {
-              const data = await res.json();
-              // 銘柄名をmasterDataのcodeMapで補完
-              const results = (data.results||[]).map(r => ({
-                ...r,
-                name: r.name || masterData.codeMap?.[r.code] || r.code,
-              }));
-              all.push(...results);
+            const day = await r.json().catch(() => ({ ok: false }));
+            if (day.ok) {
+              done = true;
+              if (day.count > 0) {
+                gotDays++;
+                for (const b of day.bars) {
+                  if (!targetCodes.has(b.code)) continue; // 対象業種のみ保持
+                  if (!seriesByCode[b.code]) seriesByCode[b.code] = [];
+                  seriesByCode[b.code].push({ c: b.c, v: b.v });
+                }
+              }
+            } else if (day.rateLimited) {
+              await new Promise(res => setTimeout(res, 5000)); // 429は5秒待って再試行
+            } else {
+              done = true; // 取得不可日はスキップ
             }
-          } catch(_) {}
+          }
+          await new Promise(res => setTimeout(res, 1100)); // Light 60req/分を尊重
         }
-        all.sort((a,b)=>b.score-a.score);
+
+        if (gotDays === 0) { setSError("日足が取得できませんでした（APIキー/プラン/レート制限を確認）"); setSLoading(false); return; }
+
+        // Step3: クライアント側でシグナル判定（名前はcodeMapから付与）
+        setSStatus("🧮 シグナル判定中...");
+        const all = [];
+        for (const code of targetCodes) {
+          const series = seriesByCode[code];
+          if (!series || series.length < 5) continue;
+          const sig = clientCalcSignals(series, signalMode);
+          if (sig.patterns.length > 0) all.push({ code, name: codeMap[code] || code, ...sig });
+        }
+        all.sort((a, b) => b.score - a.score);
         setSResult(all);
-        setSStatus(all.length===0?`${codes.length}銘柄スキャン完了 — 条件を満たす銘柄なし`:`完了！ ${codes.length}銘柄中 ${all.length}銘柄検出`);
-      } catch(e) { setSError(e.message); }
+        setSStatus(all.length === 0
+          ? `${targetCodes.size}銘柄スキャン完了（${gotDays}日ぶん） — 条件を満たす銘柄なし`
+          : `完了！ ${targetCodes.size}銘柄中 ${all.length}銘柄検出（${gotDays}日ぶん）`);
+      } catch (e) { setSError(e.message); }
       finally { setSLoading(false); }
       return;
     }
