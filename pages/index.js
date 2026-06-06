@@ -95,6 +95,8 @@ function scoreAvg(scores) {
   const vals = Object.values(scores || {}).map(Number).filter(n => !isNaN(n));
   return vals.length ? Math.round(vals.reduce((a, b) => a + b, 0) / vals.length * 10) / 10 : 0;
 }
+// 売買代金の下限（円）。直近20日平均がこれ未満の銘柄は除外。5億円=500_000_000。
+const MIN_TURNOVER = 500_000_000;
 // 直近n営業日（土日のみ除外。祝日は market-bars 側で弾く）
 function getRecentTradingDays(n) {
   const days = [];
@@ -114,6 +116,9 @@ function clientCalcSignals(series, mode) {
   if (n < 5) return { patterns: [] };
   const closes = series.map(d => d.c);
   const volumes = series.map(d => d.v);
+  const turnovers = series.map(d => d.va || 0);
+  const avgTurnover = turnovers.slice(-Math.min(20, n)).reduce((a, b) => a + b, 0) / Math.min(20, n);
+  if (avgTurnover < MIN_TURNOVER) return { patterns: [] }; // 売買代金が薄い銘柄を除外
   const ma = (arr, p) => (arr.length < p ? null : arr.slice(-p).reduce((a, b) => a + b, 0) / p);
 
   const ma5 = ma(closes, 5);
@@ -485,7 +490,7 @@ export default function Home() {
                 for (const b of day.bars) {
                   if (!targetCodes.has(b.code)) continue; // 対象業種のみ保持
                   if (!seriesByCode[b.code]) seriesByCode[b.code] = [];
-                  seriesByCode[b.code].push({ c: b.c, v: b.v });
+                  seriesByCode[b.code].push({ c: b.c, v: b.v, va: b.va });
                 }
               }
             } else if (day.rateLimited) {
@@ -552,7 +557,7 @@ export default function Home() {
               for (const b of day.bars) {
                 if (!targetSet.has(b.code)) continue; // 貼ったコードだけ保持
                 if (!seriesByCode[b.code]) seriesByCode[b.code] = [];
-                seriesByCode[b.code].push({ c: b.c, v: b.v });
+                seriesByCode[b.code].push({ c: b.c, v: b.v, va: b.va });
               }
             }
           } else if (day.rateLimited) {
