@@ -518,29 +518,68 @@ export default function Home() {
       return;
     }
 
-    // ウォッチリスト or カスタム
-    const codesToScan = scanTarget==="custom"
-      ? customInput.split(/[\s,\n]+/).map(s=>s.trim()).filter(s=>/^\d{4}$/.test(s))
+    // ウォッチリスト or カスタム（date ベース：業種スキャンと同じ配管を再利用）
+    const targetCodes = scanTarget === "custom"
+      ? customInput.split(/[\s,\n]+/).map(s => s.trim()).filter(s => /^[0-9A-Za-z]{4}$/.test(s))
       : S_WATCHLIST;
-    if (codesToScan.length===0) { setSError("有効な4桁の銘柄コードを入力してください"); setSLoading(false); return; }
+    if (targetCodes.length === 0) { setSError("有効な4桁の銘柄コードを入力してください"); setSLoading(false); return; }
+    if (!jqApiKey) { setSError("スキャンにはJ-QuantsのAPIキー設定が必要です。右上⚙️設定から接続してください。"); setSLoading(false); return; }
 
-    const CHUNK = 10, all = [];
     try {
-      for (let i=0; i<codesToScan.length; i+=CHUNK) {
-        const chunk = codesToScan.slice(i,i+CHUNK);
-        setSStatus(`スキャン中... (${Math.min(i+CHUNK,codesToScan.length)}/${codesToScan.length})`);
-        try {
-          const res = await fetch("/api/ssignal", {
-            method:"POST", headers:{"Content-Type":"application/json"},
-            body: JSON.stringify({ codes:chunk, apiKey:jqApiKey||undefined, mode:signalMode }),
+      const targetSet = new Set(targetCodes);
+      const codeMap = {};
+      for (const c of targetCodes) codeMap[c] = c; // 名前は後でbarsから付かないので暫定でコード
+
+      const DAYS = 60;
+      const tradingDays = getRecentTradingDays(DAYS);
+      const seriesByCode = {};
+      let gotDays = 0;
+
+      for (let i = 0; i < tradingDays.length; i++) {
+        setSStatus(`📈 日足を取得中... (${i + 1}/${tradingDays.length}日)`);
+        let attempt = 0, done = false;
+        while (attempt < 2 && !done) {
+          attempt++;
+          const r = await fetch("/api/market-bars", {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ apiKey: jqApiKey, date: tradingDays[i] }),
           });
-          if (res.ok) { const data=await res.json(); all.push(...(data.results||[])); }
-        } catch(_) {}
+          const day = await r.json().catch(() => ({ ok: false }));
+          if (day.ok) {
+            done = true;
+            if (day.count > 0) {
+              gotDays++;
+              for (const b of day.bars) {
+                if (!targetSet.has(b.code)) continue; // 貼ったコードだけ保持
+                if (!seriesByCode[b.code]) seriesByCode[b.code] = [];
+                seriesByCode[b.code].push({ c: b.c, v: b.v });
+              }
+            }
+          } else if (day.rateLimited) {
+            await new Promise(res => setTimeout(res, 5000));
+          } else {
+            done = true;
+          }
+        }
+        await new Promise(res => setTimeout(res, 1100)); // Light 60req/分
       }
-      all.sort((a,b)=>b.score-a.score);
+
+      if (gotDays === 0) { setSError("日足が取得できませんでした（APIキー/プラン/レート制限を確認）"); setSLoading(false); return; }
+
+      setSStatus("🧮 シグナル判定中...");
+      const all = [];
+      for (const code of targetCodes) {
+        const series = seriesByCode[code];
+        if (!series || series.length < 5) continue;
+        const sig = clientCalcSignals(series, signalMode);
+        if (sig.patterns.length > 0) all.push({ code, name: codeMap[code] || code, ...sig });
+      }
+      all.sort((a, b) => b.score - a.score);
       setSResult(all);
-      setSStatus(all.length===0?"条件を満たす銘柄なし":`完了！ ${all.length}銘柄検出`);
-    } catch(e) { setSError(e.message); }
+      setSStatus(all.length === 0
+        ? `${targetCodes.length}銘柄スキャン完了（${gotDays}日ぶん） — 条件を満たす銘柄なし`
+        : `完了！ ${targetCodes.length}銘柄中 ${all.length}銘柄検出（${gotDays}日ぶん）`);
+    } catch (e) { setSError(e.message); }
     finally { setSLoading(false); }
   }
 
