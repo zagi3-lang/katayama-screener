@@ -1,133 +1,61 @@
-// pages/api/ssignal.js — J-Quants v2正式対応版（dataキー対応）
-// 判定ロジックは lib/signals.js に一本化済み（重複実装を廃止）
-import { calcSignals, requiredBars } from "../../lib/signals";
+// pages/api/market-bars.js
+// 指定日の「全上場銘柄」の日足を1回で取得する（J-Quants v2）
+//   GET /v2/equities/bars/daily?date=YYYYMMDD  → その日の全銘柄が返る（銘柄数に非依存）
+// 返却: { ok, count, bars:[{code, c, v, va}], rateLimited?, error? }
+//   code = 4桁に正規化 / c=終値(C) / h=高値(H) / l=安値(L) / v=出来高(Vo) / va=売買代金(Va)
+//   h/l は ATR・VCP 判定に必要（2026-09 追加）。取得できない場合は c で代用。
+// 祝日・非営業日は data:[] が返るので count:0 で ok を返す（クライアント側でスキップ）。
+
+const V2 = "https://api.jquants.com/v2";
+
 export default async function handler(req, res) {
-  if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
-  const { codes, apiKey, mode } = req.body;
-  if (!codes || !Array.isArray(codes) || codes.length === 0) {
-    return res.status(400).json({ error: "codesが必要です" });
-  }
+  if (req.method !== "POST") return res.status(405).json({ ok: false, error: "POST only" });
 
-  const results = [];
-  const debug = { fetched: 0, failed: 0, no_signal: 0, skipped: {} };
-  // モードが要求する本数から取得日数を逆算（暦日の平日ベースなので1.45倍しておく）
-  const needDays = Math.ceil(requiredBars(mode) * 1.45);
+  const { apiKey, date } = req.body || {};
+  if (!apiKey) return res.status(200).json({ ok: false, error: "apiKey required" });
+  if (!date)   return res.status(200).json({ ok: false, error: "date required" });
 
-  for (const code of codes) {
-    try {
-      let data = null;
+  const ymd = String(date).replace(/-/g, "");   // v2 は YYYYMMDD
+  const headers = { "x-api-key": apiKey };
 
-      if (apiKey) {
-        data = await fetchFromJQuants(code, apiKey, needDays);
-      }
-      if (!data || data.length < 5) {
-        data = await fetchFromStooq(code);
-      }
-      if (!data || data.length < 5) { debug.failed++; continue; }
-
-      debug.fetched++;
-      const series = data.map(d => ({ c: d.close, h: d.high, l: d.low, v: d.volume, va: 0 }));
-      const signal = calcSignals(series, mode);
-      if (signal.skipped) debug.skipped[signal.skipped] = (debug.skipped[signal.skipped] || 0) + 1;
-      if (signal.patterns.length > 0) {
-        results.push({
-          code,
-          name:          signal.name || code,
-          rsi:           signal.rsi,
-          s_count:       signal.s_count,
-          close:         signal.close,
-          ma5:           signal.ma5,
-          ma25:          signal.ma25,
-          ma75:          signal.ma75,
-          ma200:         signal.ma200,
-          patterns:      signal.patterns,
-          score:         signal.score,
-          perfect_order: signal.perfect_order,
-          po_available:  signal.poAvailable,
-          obv_strength:  signal.obv_strength,
-          range_atr:     signal.range_atr,
-          vcp_waves:     signal.vcp_waves,
-          bars:          signal.bars,
-        });
-      } else { debug.no_signal++; }
-    } catch (e) { debug.failed++; }
-  }
-
-  results.sort((a, b) => b.score - a.score);
-  return res.status(200).json({ results, debug, total: codes.length });
-}
-
-// ── J-Quants v2（dateパラメータ、dataキー対応）──
-async function fetchFromJQuants(code, apiKey, days = 30) {
   try {
-    const headers = { "x-api-key": apiKey };
-    const tradingDays = getRecentTradingDays(days);
-    const allQuotes = [];
+    const bars = [];
+    let pageKey = null;
+    let pages = 0;
 
-    const BATCH = 5;
-    for (let i = 0; i < tradingDays.length; i += BATCH) {
-      const batch = tradingDays.slice(i, i + BATCH);
-      const settled = await Promise.allSettled(
-        batch.map(async (date) => {
-          const dateStr = date.replace(/-/g, "");
-          const url = `https://api.jquants.com/v2/equities/bars/daily?code=${code}&date=${dateStr}`;
-          const r = await fetch(url, { headers, signal: AbortSignal.timeout(8000) });
-          if (!r.ok) return [];
-          const json = await r.json();
-          // "data"キー対応（v2の実際のレスポンス）
-          return json.daily_quotes ?? json.bars ?? json.data ?? [];
-        })
-      );
-      for (const r of settled) {
-        if (r.status === "fulfilled") allQuotes.push(...r.value);
+    do {
+      const url = new URL(`${V2}/equities/bars/daily`);
+      url.searchParams.set("date", ymd);
+      if (pageKey) url.searchParams.set("pagination_key", pageKey);
+
+      const r = await fetch(url.toString(), { headers });
+
+      if (r.status === 429) return res.status(200).json({ ok: false, rateLimited: true });
+      if (!r.ok) {
+        const t = await r.text().catch(() => "");
+        return res.status(200).json({ ok: false, error: `HTTP ${r.status} ${t.slice(0, 200)}` });
       }
-    }
 
-    if (allQuotes.length < 5) return null;
-    return allQuotes
-      .sort((a, b) => (a.Date ?? a.date ?? "").localeCompare(b.Date ?? b.date ?? ""))
-      .map(q => ({
-        date:   q.Date   ?? q.date,
-        open:   parseFloat(q.Open   ?? q.O ?? q.open   ?? 0),
-        high:   parseFloat(q.High   ?? q.H ?? q.high   ?? 0),
-        low:    parseFloat(q.Low    ?? q.L ?? q.low    ?? 0),
-        close:  parseFloat(q.Close  ?? q.C ?? q.close  ?? 0),
-        volume: parseFloat(q.Volume ?? q.Vo ?? q.volume ?? 0),
-      }))
-      .filter(q => q.close > 0);
-  } catch { return null; }
-}
+      const json = await r.json();
+      const rows = json.data || [];
+      for (const d of rows) {
+        const code = String(d.Code ?? d.code ?? "").slice(0, 4);   // 5桁→4桁
+        const c  = Number(d.C  ?? d.Close  ?? d.c);
+        const hRaw = Number(d.H ?? d.High ?? d.h);
+        const lRaw = Number(d.L ?? d.Low  ?? d.l);
+        const v  = Number(d.Vo ?? d.Volume ?? d.v);
+        const va = Number(d.Va ?? d.TurnoverValue ?? 0);           // 売買代金
+        if (!code || !isFinite(c)) continue;
+        const h = isFinite(hRaw) && hRaw > 0 ? hRaw : c;           // 取れなければ終値で代用
+        const l = isFinite(lRaw) && lRaw > 0 ? lRaw : c;
+        bars.push({ code, c, h, l, v: isFinite(v) ? v : 0, va: isFinite(va) ? va : 0 });
+      }
+      pageKey = json.pagination_key || null;
+      pages++;
+    } while (pageKey && pages < 20);
 
-// ── stooq.com フォールバック ──
-async function fetchFromStooq(code) {
-  try {
-    const num = code.replace(/[^0-9]/g, "");
-    const url = `https://stooq.com/q/d/l/?s=${num}.jp&i=d`;
-    const r = await fetch(url, {
-      headers: { "User-Agent": "Mozilla/5.0" },
-      signal: AbortSignal.timeout(8000),
-    });
-    if (!r.ok) return null;
-    const text = await r.text();
-    const lines = text.trim().split("\n").slice(1);
-    if (lines.length < 5) return null;
-    return lines.map(line => {
-      const [date, open, high, low, close, volume] = line.split(",");
-      return { date, open: +open, high: +high, low: +low, close: +close, volume: +volume || 0 };
-    }).filter(q => q.close > 0);
-  } catch { return null; }
-}
-
-function getRecentTradingDays(n) {
-  const days = [];
-  const d = new Date();
-  while (days.length < n) {
-    d.setDate(d.getDate() - 1);
-    const dow = d.getDay();
-    if (dow === 0 || dow === 6) continue;
-    days.unshift(d.toISOString().slice(0, 10));
+    return res.status(200).json({ ok: true, count: bars.length, bars });
+  } catch (e) {
+    return res.status(200).json({ ok: false, error: e.message });
   }
-  return days;
 }
-
-// calcSignals はここにあった実装を lib/signals.js へ移動しました。
