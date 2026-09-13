@@ -1,4 +1,6 @@
 // pages/api/ssignal.js — J-Quants v2正式対応版（dataキー対応）
+// 判定ロジックは lib/signals.js に一本化済み（重複実装を廃止）
+import { calcSignals, requiredBars } from "../../lib/signals";
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
   const { codes, apiKey, mode } = req.body;
@@ -7,14 +9,16 @@ export default async function handler(req, res) {
   }
 
   const results = [];
-  const debug = { fetched: 0, failed: 0, no_signal: 0 };
+  const debug = { fetched: 0, failed: 0, no_signal: 0, skipped: {} };
+  // モードが要求する本数から取得日数を逆算（暦日の平日ベースなので1.45倍しておく）
+  const needDays = Math.ceil(requiredBars(mode) * 1.45);
 
   for (const code of codes) {
     try {
       let data = null;
 
       if (apiKey) {
-        data = await fetchFromJQuants(code, apiKey);
+        data = await fetchFromJQuants(code, apiKey, needDays);
       }
       if (!data || data.length < 5) {
         data = await fetchFromStooq(code);
@@ -22,7 +26,9 @@ export default async function handler(req, res) {
       if (!data || data.length < 5) { debug.failed++; continue; }
 
       debug.fetched++;
-      const signal = calcSignals(data, mode);
+      const series = data.map(d => ({ c: d.close, h: d.high, l: d.low, v: d.volume, va: 0 }));
+      const signal = calcSignals(series, mode);
+      if (signal.skipped) debug.skipped[signal.skipped] = (debug.skipped[signal.skipped] || 0) + 1;
       if (signal.patterns.length > 0) {
         results.push({
           code,
@@ -37,6 +43,11 @@ export default async function handler(req, res) {
           patterns:      signal.patterns,
           score:         signal.score,
           perfect_order: signal.perfect_order,
+          po_available:  signal.poAvailable,
+          obv_strength:  signal.obv_strength,
+          range_atr:     signal.range_atr,
+          vcp_waves:     signal.vcp_waves,
+          bars:          signal.bars,
         });
       } else { debug.no_signal++; }
     } catch (e) { debug.failed++; }
@@ -47,10 +58,10 @@ export default async function handler(req, res) {
 }
 
 // ── J-Quants v2（dateパラメータ、dataキー対応）──
-async function fetchFromJQuants(code, apiKey) {
+async function fetchFromJQuants(code, apiKey, days = 30) {
   try {
     const headers = { "x-api-key": apiKey };
-    const tradingDays = getRecentTradingDays(30);
+    const tradingDays = getRecentTradingDays(days);
     const allQuotes = [];
 
     const BATCH = 5;
@@ -119,90 +130,4 @@ function getRecentTradingDays(n) {
   return days;
 }
 
-function calcSignals(data, mode) {
-  const n = data.length;
-  const closes  = data.map(d => d.close);
-  const volumes = data.map(d => d.volume);
-
-  const ma = (arr, period) => {
-    if (arr.length < period) return null;
-    return arr.slice(-period).reduce((a, b) => a + b, 0) / period;
-  };
-
-  const ma5   = ma(closes, 5);
-  const ma25  = ma(closes, Math.min(25, n));
-  const ma75  = ma(closes, Math.min(75, n));
-  const ma200 = ma(closes, Math.min(200, n));
-
-  const perfect_order = ma5 && ma25 && ma75 && ma200
-    ? (ma5 > ma25 && ma25 > ma75 && ma75 > ma200) : false;
-
-  let obv = 0;
-  const obvArr = [0];
-  for (let i = 1; i < n; i++) {
-    if (closes[i] > closes[i-1])      obv += volumes[i];
-    else if (closes[i] < closes[i-1]) obv -= volumes[i];
-    obvArr.push(obv);
-  }
-  const obvRising = obvArr[n-1] > obvArr[Math.max(0, n-10)] * 1.01;
-
-  let gains = 0, losses = 0;
-  const rsiLen = Math.min(14, n - 1);
-  for (let i = n - rsiLen; i < n; i++) {
-    const diff = closes[i] - closes[i-1];
-    if (diff > 0) gains += diff; else losses -= diff;
-  }
-  const rsi = gains + losses === 0 ? 50 : Math.round(100 * gains / (gains + losses));
-
-  const recent = closes.slice(-Math.min(10, n));
-  const priceFlat = (Math.max(...recent) - Math.min(...recent)) / Math.min(...recent) < 0.05;
-
-  const vol5  = volumes.slice(-5).reduce((a, b) => a + b, 0) / 5;
-  const vol20 = volumes.slice(-Math.min(20, n)).reduce((a, b) => a + b, 0) / Math.min(20, n);
-  const volSurge = vol20 > 0 && vol5 > vol20 * 1.5;
-
-  const close = Math.round(closes[n - 1]);
-  const patterns = [];
-  let score = 0;
-
-  if (perfect_order) {
-    patterns.push({ key: "PO", emoji: "🏆", label: "パーフェクトオーダー", detail: `MA5>MA25>MA75>MA200` });
-    score += 40;
-  }
-  const sSignal = obvRising && priceFlat && rsi >= 40 && rsi <= 65;
-  if (sSignal) {
-    patterns.push({ key: "S", emoji: "💎", label: "仕込みS", detail: `OBV↑×横ばい×RSI${rsi}` });
-    score += 30;
-  }
-  if (obvRising && !priceFlat) {
-    patterns.push({ key: "DIV", emoji: "📡", label: "OBVダイバージェンス", detail: "OBV先行上昇" });
-    score += 10;
-  }
-  if (volSurge) {
-    patterns.push({ key: "VOL", emoji: "🔥", label: "出来高急増", detail: `${(vol5/vol20).toFixed(1)}x` });
-    score += 10;
-  }
-  if (ma5 && ma25 && ma5 > ma25) {
-    patterns.push({ key: "MA", emoji: "📐", label: "MA収束", detail: "MA5>MA25" });
-    score += 10;
-  }
-  if (rsi >= 30 && rsi <= 45) {
-    patterns.push({ key: "RSI", emoji: "🔄", label: "RSI反転", detail: `RSI${rsi}` });
-    score += 5;
-  }
-
-  if (mode === "po_only"  && !perfect_order)              return { patterns: [] };
-  if (mode === "s_only"   && !sSignal)                    return { patterns: [] };
-  if (mode === "po_and_s" && !(perfect_order && sSignal)) return { patterns: [] };
-
-  return {
-    close, rsi,
-    ma5:   Math.round(ma5  ?? 0),
-    ma25:  Math.round(ma25 ?? 0),
-    ma75:  Math.round(ma75 ?? 0),
-    ma200: Math.round(ma200 ?? 0),
-    perfect_order, patterns, score,
-    s_count: patterns.filter(p => p.key === "S").length,
-    name: "",
-  };
-}
+// calcSignals はここにあった実装を lib/signals.js へ移動しました。

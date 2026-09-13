@@ -2,7 +2,8 @@
 // 指定日の「全上場銘柄」の日足を1回で取得する（J-Quants v2）
 //   GET /v2/equities/bars/daily?date=YYYYMMDD  → その日の全銘柄が返る（銘柄数に非依存）
 // 返却: { ok, count, bars:[{code, c, v, va}], rateLimited?, error? }
-//   code = 4桁に正規化 / c=終値(C) / v=出来高(Vo) / va=売買代金(Va, 後の流動性フィルタ用)
+//   code = 4桁に正規化 / c=終値(C) / h=高値(H) / l=安値(L) / v=出来高(Vo) / va=売買代金(Va)
+//   h/l は ATR・VCP 判定に必要（2026-09 追加）。取得できない場合は c で代用。
 // 祝日・非営業日は data:[] が返るので count:0 で ok を返す（クライアント側でスキップ）。
 
 const V2 = "https://api.jquants.com/v2";
@@ -40,10 +41,14 @@ export default async function handler(req, res) {
       for (const d of rows) {
         const code = String(d.Code ?? d.code ?? "").slice(0, 4);   // 5桁→4桁
         const c  = Number(d.C  ?? d.Close  ?? d.c);
+        const hRaw = Number(d.H ?? d.High ?? d.h);
+        const lRaw = Number(d.L ?? d.Low  ?? d.l);
         const v  = Number(d.Vo ?? d.Volume ?? d.v);
         const va = Number(d.Va ?? d.TurnoverValue ?? 0);           // 売買代金
         if (!code || !isFinite(c)) continue;
-        bars.push({ code, c, v: isFinite(v) ? v : 0, va: isFinite(va) ? va : 0 });
+        const h = isFinite(hRaw) && hRaw > 0 ? hRaw : c;           // 取れなければ終値で代用
+        const l = isFinite(lRaw) && lRaw > 0 ? lRaw : c;
+        bars.push({ code, c, h, l, v: isFinite(v) ? v : 0, va: isFinite(va) ? va : 0 });
       }
       pageKey = json.pagination_key || null;
       pages++;

@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from "react";
 import Head from "next/head";
+import { calcSignals as coreCalcSignals, requiredBars } from "../lib/signals";
 
 const CRITERIA = [
   { key: "growth",     label: "成長性",         icon: "📈" },
@@ -38,6 +39,8 @@ const SIGNAL_MODES = [
   { id: "po_and_s",  label: "🏆 PO＋Sシグナル",          desc: "パーフェクトオーダー＋仕込みS（最強）" },
   { id: "po_only",   label: "📐 パーフェクトオーダーのみ", desc: "MA5>MA25>MA75>MA200" },
   { id: "s_only",    label: "💎 Sシグナルのみ",           desc: "OBV上昇×株価横ばい×RSI適正帯" },
+  { id: "vcp_only",  label: "🌀 VCPのみ",                desc: "収縮が段階的に縮む×高値圏×出来高枯れ" },
+  { id: "vcp_and_s", label: "🌀💎 VCP＋Sシグナル",       desc: "収縮完成＋資金流入の同時成立" },
 ];
 
 const SECTORS = [
@@ -95,8 +98,7 @@ function scoreAvg(scores) {
   const vals = Object.values(scores || {}).map(Number).filter(n => !isNaN(n));
   return vals.length ? Math.round(vals.reduce((a, b) => a + b, 0) / vals.length * 10) / 10 : 0;
 }
-// 売買代金の下限（円）。直近20日平均がこれ未満の銘柄は除外。5億円=500_000_000。
-const MIN_TURNOVER = 500_000_000;
+// 売買代金の下限は lib/signals.js の SIG_DEFAULTS.minTurnover に移動
 // 直近n営業日（土日のみ除外。祝日は market-bars 側で弾く）
 function getRecentTradingDays(n) {
   const days = [];
@@ -110,67 +112,12 @@ function getRecentTradingDays(n) {
   return days;
 }
 
-// クライアント側シグナル判定（ssignalのcalcSignalsを移植。series=[{c,v},...]昇順）
+// クライアント側シグナル判定は lib/signals.js に一本化（旧実装は削除）
+// series=[{c,h,l,v,va},...] 昇順
 function clientCalcSignals(series, mode) {
-  const n = series.length;
-  if (n < 5) return { patterns: [] };
-  const closes = series.map(d => d.c);
-  const volumes = series.map(d => d.v);
-  const turnovers = series.map(d => d.va || 0);
-  const avgTurnover = turnovers.slice(-Math.min(20, n)).reduce((a, b) => a + b, 0) / Math.min(20, n);
-  if (avgTurnover < MIN_TURNOVER) return { patterns: [] }; // 売買代金が薄い銘柄を除外
-  const ma = (arr, p) => (arr.length < p ? null : arr.slice(-p).reduce((a, b) => a + b, 0) / p);
-
-  const ma5 = ma(closes, 5);
-  const ma25 = ma(closes, Math.min(25, n));
-  const ma75 = ma(closes, Math.min(75, n));
-  const ma200 = ma(closes, Math.min(200, n));
-  const perfect_order = ma5 && ma25 && ma75 && ma200 ? (ma5 > ma25 && ma25 > ma75 && ma75 > ma200) : false;
-
-  let obv = 0; const obvArr = [0];
-  for (let i = 1; i < n; i++) {
-    if (closes[i] > closes[i - 1]) obv += volumes[i];
-    else if (closes[i] < closes[i - 1]) obv -= volumes[i];
-    obvArr.push(obv);
-  }
-  const obvRising = obvArr[n - 1] > obvArr[Math.max(0, n - 10)] * 1.01;
-
-  let gains = 0, losses = 0;
-  const rsiLen = Math.min(14, n - 1);
-  for (let i = n - rsiLen; i < n; i++) {
-    const diff = closes[i] - closes[i - 1];
-    if (diff > 0) gains += diff; else losses -= diff;
-  }
-  const rsi = gains + losses === 0 ? 50 : Math.round(100 * gains / (gains + losses));
-
-  const recent = closes.slice(-Math.min(10, n));
-  const priceFlat = (Math.max(...recent) - Math.min(...recent)) / Math.min(...recent) < 0.05;
-
-  const vol5 = volumes.slice(-5).reduce((a, b) => a + b, 0) / 5;
-  const vol20 = volumes.slice(-Math.min(20, n)).reduce((a, b) => a + b, 0) / Math.min(20, n);
-  const volSurge = vol20 > 0 && vol5 > vol20 * 1.5;
-
-  const close = Math.round(closes[n - 1]);
-  const patterns = []; let score = 0;
-  if (perfect_order) { patterns.push({ key: "PO", emoji: "🏆", label: "パーフェクトオーダー" }); score += 40; }
-  const sSignal = obvRising && priceFlat && rsi >= 40 && rsi <= 65;
-  if (sSignal) { patterns.push({ key: "S", emoji: "💎", label: "仕込みS" }); score += 30; }
-  if (obvRising && !priceFlat) { patterns.push({ key: "DIV", emoji: "📡", label: "OBVダイバージェンス" }); score += 10; }
-  if (volSurge) { patterns.push({ key: "VOL", emoji: "🔥", label: "出来高急増" }); score += 10; }
-  if (ma5 && ma25 && ma5 > ma25) { patterns.push({ key: "MA", emoji: "📐", label: "MA収束" }); score += 10; }
-  if (rsi >= 30 && rsi <= 45) { patterns.push({ key: "RSI", emoji: "🔄", label: "RSI反転" }); score += 5; }
-
-  if (mode === "po_only" && !perfect_order) return { patterns: [] };
-  if (mode === "s_only" && !sSignal) return { patterns: [] };
-  if (mode === "po_and_s" && !(perfect_order && sSignal)) return { patterns: [] };
-
-  return {
-    close, rsi,
-    ma5: Math.round(ma5 ?? 0), ma25: Math.round(ma25 ?? 0),
-    ma75: Math.round(ma75 ?? 0), ma200: Math.round(ma200 ?? 0),
-    perfect_order, patterns, score,
-  };
+  return coreCalcSignals(series, mode);
 }
+
 const F = { fontFamily: "'Hiragino Kaku Gothic ProN','Noto Sans JP','Yu Gothic',sans-serif" };
 
 function ScoreBar({ score }) {
@@ -468,7 +415,8 @@ export default function Home() {
         if (targetCodes.size === 0) { setSError("対象銘柄が見つかりませんでした"); setSLoading(false); return; }
 
         // Step2: 直近DAYS営業日ぶんの全市場日足を「日付ごと」に取得
-        const DAYS = 60; // 多いほどMA精度↑だがAPIコール↑（MA200には約200日必要）
+        // 選択モードが必要とする本数から逆算（PO/MA200は約200本必要）
+        const DAYS = Math.ceil(requiredBars(signalMode) * 1.45);
         const tradingDays = getRecentTradingDays(DAYS);
         const seriesByCode = {};
         let gotDays = 0;
@@ -490,7 +438,7 @@ export default function Home() {
                 for (const b of day.bars) {
                   if (!targetCodes.has(b.code)) continue; // 対象業種のみ保持
                   if (!seriesByCode[b.code]) seriesByCode[b.code] = [];
-                  seriesByCode[b.code].push({ c: b.c, v: b.v, va: b.va });
+                  seriesByCode[b.code].push({ c: b.c, h: b.h ?? b.c, l: b.l ?? b.c, v: b.v, va: b.va });
                 }
               }
             } else if (day.rateLimited) {
@@ -535,7 +483,7 @@ export default function Home() {
       const codeMap = {};
       for (const c of targetCodes) codeMap[c] = c; // 名前は後でbarsから付かないので暫定でコード
 
-      const DAYS = 60;
+      const DAYS = Math.ceil(requiredBars(signalMode) * 1.45);
       const tradingDays = getRecentTradingDays(DAYS);
       const seriesByCode = {};
       let gotDays = 0;
@@ -557,7 +505,7 @@ export default function Home() {
               for (const b of day.bars) {
                 if (!targetSet.has(b.code)) continue; // 貼ったコードだけ保持
                 if (!seriesByCode[b.code]) seriesByCode[b.code] = [];
-                seriesByCode[b.code].push({ c: b.c, v: b.v, va: b.va });
+                seriesByCode[b.code].push({ c: b.c, h: b.h ?? b.c, l: b.l ?? b.c, v: b.v, va: b.va });
               }
             }
           } else if (day.rateLimited) {
@@ -763,7 +711,7 @@ export default function Home() {
 
               {/* フィルター */}
               <div style={{display:"flex",flexWrap:"wrap",gap:8,marginBottom:16}}>
-                {[["all","🔍 全件"],["PO","🏆 PO"],["S","💎 仕込みS"],["DIV","📡 OBVダイバージェンス"],["VOL","🔥 出来高急増"],["MA","📐 MA収束"],["RSI","🔄 RSI反転"]].map(([f,label])=>(
+                {[["all","🔍 全件"],["PO","🏆 PO"],["VCP","🌀 VCP"],["S","💎 仕込みS"],["DIV","📡 OBVダイバージェンス"],["VOL","🔥 出来高急増"],["MA","📐 MA収束"],["RSI","🔄 RSI反転"]].map(([f,label])=>(
                   <button key={f} onClick={()=>setSFilter(f)}
                     style={{padding:"7px 14px",borderRadius:8,fontSize:12,cursor:"pointer",fontFamily:"inherit",
                       background:sFilter===f?"rgba(0,229,160,0.1)":"#161b22",
