@@ -39,19 +39,22 @@ const K = {
   totalAssets: ["TA", "TotalAssets", "total_assets"],
   equity:      ["Eq", "Equity", "equity", "NetAssets", "net_assets", "TotalNetAssets"],
   equityRatio: ["EqAR", "EquityToAssetRatio", "equity_to_asset_ratio", "EquityRatio", "equity_ratio"],
-  fcastSales:  ["FcstSales", "NxtYrFcstSales", "ForecastNetSales", "forecast_net_sales"],
-  fcastOp:     ["FcstOP", "NxtYrFcstOP", "ForecastOperatingProfit", "forecast_operating_profit"],
-  fcastEps:    ["FcstEPS", "NxtYrFcstEPS", "ForecastEarningsPerShare", "forecast_eps", "ForecastEPS"],
-  // 発行済株式数・自己株式：v2での略称が未確認のため候補を広めに取る
+  fcastSales:  ["FSales", "ForecastNetSales", "forecast_net_sales"],
+  fcastOp:     ["FOP", "ForecastOperatingProfit", "forecast_operating_profit"],
+  fcastEps:    ["FEPS", "ForecastEarningsPerShare", "forecast_eps", "ForecastEPS"],
+  // J-Quantsが提供するROE（自前計算より優先して使う）
+  roeGiven:    ["ROE"],
+  // 期末発行済株式数（自己株式含む）と期末自己株式数
+  // AvgSh は期中平均でEPS算出用のため、時価総額には使わない
   shares: [
-    "ShOut", "IssShares", "NumShares", "SharesOut", "TotalShares",
+    "ShOutFY",
     "NumberOfIssuedAndOutstandingSharesAtTheEndOfFiscalYearIncludingTreasuryStock",
-    "NumberOfIssuedAndOutstandingShares", "IssuedShares", "issued_shares",
+    "NumberOfIssuedAndOutstandingShares", "IssuedShares",
   ],
   treasury: [
-    "TrSh", "TreasuryShares", "NumTreasury", "TrStock",
+    "TrShFY",
     "NumberOfTreasuryStockAtTheEndOfFiscalYear",
-    "NumberOfTreasuryStock", "treasury_stock",
+    "NumberOfTreasuryStock",
   ],
   period:    ["CurPerType", "TypeOfCurrentPeriod", "type_of_current_period", "Period", "period"],
   periodEnd: ["CurPerEn", "CurrentPeriodEndDate", "current_period_end_date", "PeriodEndDate"],
@@ -156,6 +159,7 @@ async function fetchOne(code, headers) {
     sharesOutstanding: null, // 発行済 − 自己株式
     marketCap: null,         // 円
     marketCapOku: null,      // 億円（表示用）
+    bpsBasis: null,          // BPSを自前算出した場合の根拠
     statementDate: null,     // 財務データの開示日
     fetchedAt: null,         // このレスポンスを組み立てた日付
   };
@@ -266,25 +270,32 @@ async function fetchOne(code, headers) {
   }
   if (items.salesYoY === null) failed.push("売上成長率(YoY)");
 
-  // ── ROE：通期実績を優先、四半期しかなければ年率換算 ──
-  const fyStmt = [...sorted].reverse().find(
-    (s) => String(pickStr(s, K.period) || "").toUpperCase() === "FY" &&
-           pickNum(s, K.netProfit) !== null && pickNum(s, K.equity) !== null
-  );
-  if (fyStmt) {
-    const p = pickNum(fyStmt, K.netProfit), eq = pickNum(fyStmt, K.equity);
-    if (eq > 0) {
-      items.roe = +((p / eq) * 100).toFixed(1);
-      const fe = pickStr(fyStmt, K.fyEnd) || pickStr(fyStmt, K.periodEnd) || "";
-      items.roeBasis = `${fe ? fe.slice(0, 7).replace("-", "/") + "期 " : ""}通期実績`;
-      retrieved.push("ROE");
-    }
-  } else if (items.netProfit !== null && items.equity && items.equity > 0) {
-    const f = annualizeFactor(curPeriod);
-    if (f) {
-      items.roe = +(((items.netProfit * f) / items.equity) * 100).toFixed(1);
-      items.roeBasis = `${periodLabel(curPeriod) || curPeriod}・年率換算`;
-      retrieved.push("ROE");
+  // ── ROE：J-Quants提供値 → 通期実績の自前計算 → 四半期の年率換算 ──
+  const givenRoe = pickNum(latest, K.roeGiven);
+  if (givenRoe !== null) {
+    items.roe = +(givenRoe > 1 || givenRoe < -1 ? givenRoe : givenRoe * 100).toFixed(1);
+    items.roeBasis = "J-Quants提供値";
+    retrieved.push("ROE");
+  } else {
+    const fyStmt = [...sorted].reverse().find(
+      (s) => String(pickStr(s, K.period) || "").toUpperCase() === "FY" &&
+             pickNum(s, K.netProfit) !== null && pickNum(s, K.equity) !== null
+    );
+    if (fyStmt) {
+      const p = pickNum(fyStmt, K.netProfit), eq = pickNum(fyStmt, K.equity);
+      if (eq > 0) {
+        items.roe = +((p / eq) * 100).toFixed(1);
+        const fe = pickStr(fyStmt, K.fyEnd) || pickStr(fyStmt, K.periodEnd) || "";
+        items.roeBasis = `${fe ? fe.slice(0, 7).replace("-", "/") + "期 " : ""}通期実績`;
+        retrieved.push("ROE");
+      }
+    } else if (items.netProfit !== null && items.equity && items.equity > 0) {
+      const f = annualizeFactor(curPeriod);
+      if (f) {
+        items.roe = +(((items.netProfit * f) / items.equity) * 100).toFixed(1);
+        items.roeBasis = `${periodLabel(curPeriod) || curPeriod}・年率換算`;
+        retrieved.push("ROE");
+      }
     }
   }
   if (items.roe === null) failed.push("ROE");
@@ -308,6 +319,15 @@ async function fetchOne(code, headers) {
   } else {
     failed.push("発行済株式数");
     failed.push("時価総額");
+  }
+
+  // ── BPS補完：四半期開示ではBPSが空のことがあるため純資産÷株式数で算出 ──
+  if (items.bps === null && items.equity && items.sharesOutstanding > 0) {
+    items.bps = +(items.equity / items.sharesOutstanding).toFixed(2);
+    items.bpsBasis = "純資産÷(発行済−自己株式)で算出";
+    const i = failed.indexOf("bps");
+    if (i >= 0) failed.splice(i, 1);
+    retrieved.push("bps");
   }
 
   // ── PER / PBR ─────────────────────────────
