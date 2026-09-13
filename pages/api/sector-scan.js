@@ -18,7 +18,9 @@ export default async function handler(req, res) {
   const headers = { "x-api-key": apiKey };
 
   const matchSector = (s33, s33nm) => {
-    if (wanted.length === 0) return true;                 // 未指定＝全業種
+    // UI は全業種選択時に sectors:["all"] を送る。長さ1なので旧実装では
+    // 「未指定＝全業種」に当たらず、"all" と一致する業種も無いため 0件になっていた。
+    if (wanted.length === 0 || wantSet.has("all")) return true;  // 未指定 or 全業種
     if (wantSet.has(s33) || wantSet.has(s33nm)) return true; // コード/名 完全一致
     // 名前の表記ゆれ（"海運"⊂"海運業" 等）を双方向 includes で吸収
     return wanted.some(w => (s33nm && (s33nm.includes(w) || w.includes(s33nm))));
