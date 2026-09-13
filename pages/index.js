@@ -318,11 +318,17 @@ function SignalCard({ r, onAnalyze }) {
         </div>
       )}
       <div style={{ display:"flex",flexWrap:"wrap",gap:6,marginBottom:8 }}>
-        {(r.patterns||[]).map(p => <span key={p.key} style={{ fontSize:11,padding:"4px 10px",borderRadius:6,fontWeight:700,background:"rgba(0,229,160,0.08)",border:"1px solid rgba(0,229,160,0.35)",color:"#00e5a0" }}>{p.emoji} {p.label}</span>)}
+        {(r.patterns||[]).map(p => <span key={p.key} title={p.detail||""} style={{ fontSize:11,padding:"4px 10px",borderRadius:6,fontWeight:700,background:"rgba(0,229,160,0.08)",border:"1px solid rgba(0,229,160,0.35)",color:"#00e5a0" }}>{p.emoji} {p.label}{p.detail?` (${p.detail})`:""}</span>)}
       </div>
       <div style={{ display:"flex",flexWrap:"wrap",gap:6 }}>
         <span style={{ fontSize:11,padding:"3px 9px",borderRadius:5,border:"1px solid #30363d",color:r.rsi<=45?"#00e5a0":r.rsi<=63?"#ffd166":"#ff6b6b" }}>RSI {r.rsi}</span>
         <span style={{ fontSize:11,padding:"3px 9px",borderRadius:5,background:"rgba(107,114,128,0.08)",border:"1px solid #30363d",color:"#8b949e" }}>¥{r.close?.toLocaleString()}</span>
+        {/* --- 診断用バッジ：判定に使われた実測値をそのまま出す --- */}
+        {r.obv_strength!=null && <span style={{ fontSize:11,padding:"3px 9px",borderRadius:5,border:"1px solid #30363d",color:r.obv_strength>=0.15?"#00e5a0":"#8b949e" }}>OBV {r.obv_strength}</span>}
+        {r.range_atr!=null && <span style={{ fontSize:11,padding:"3px 9px",borderRadius:5,border:"1px solid #30363d",color:r.range_atr<=3?"#00e5a0":"#8b949e" }}>レンジ {r.range_atr}ATR</span>}
+        {r.vcp_waves!=null && <span style={{ fontSize:11,padding:"3px 9px",borderRadius:5,border:"1px solid #30363d",color:"#8b949e" }}>VCP波 {r.vcp_waves}</span>}
+        {r.bars!=null && <span style={{ fontSize:11,padding:"3px 9px",borderRadius:5,border:"1px solid #30363d",color:r.bars>=25?"#8b949e":"#ff6b6b" }}>{r.bars}本</span>}
+        {r.poAvailable===false && <span style={{ fontSize:11,padding:"3px 9px",borderRadius:5,border:"1px solid #30363d",color:"#6e7681" }}>PO判定不可</span>}
       </div>
     </div>
   );
@@ -455,17 +461,19 @@ export default function Home() {
         // Step3: クライアント側でシグナル判定（名前はcodeMapから付与）
         setSStatus("🧮 シグナル判定中...");
         const all = [];
+        const drop = { 履歴不足: 0, 該当なし: 0 };   // 診断用
         for (const code of targetCodes) {
           const series = seriesByCode[code];
-          if (!series || series.length < 5) continue;
+          if (!series || series.length < 5) { drop.履歴不足++; continue; }
           const sig = clientCalcSignals(series, signalMode);
+          if (sig.skipped) drop[sig.skipped] = (drop[sig.skipped] || 0) + 1;
           if (sig.patterns.length > 0) all.push({ code, name: codeMap[code] || code, ...sig });
+          else drop.該当なし++;
         }
+        const dropMsg = Object.entries(drop).filter(([, v]) => v > 0).map(([k, v]) => `${k}${v}`).join(" / ");
         all.sort((a, b) => b.score - a.score);
         setSResult(all);
-        setSStatus(all.length === 0
-          ? `${targetCodes.size}銘柄スキャン完了（${gotDays}日ぶん） — 条件を満たす銘柄なし`
-          : `完了！ ${targetCodes.size}銘柄中 ${all.length}銘柄検出（${gotDays}日ぶん）`);
+        setSStatus(`対象${targetCodes.size}銘柄 / ${gotDays}営業日 / 検出${all.length}件 — 内訳: ${dropMsg || "-"}`);
       } catch (e) { setSError(e.message); }
       finally { setSLoading(false); }
       return;
@@ -521,17 +529,19 @@ export default function Home() {
 
       setSStatus("🧮 シグナル判定中...");
       const all = [];
+      const drop = { 履歴不足: 0, 該当なし: 0 };   // 診断用
       for (const code of targetCodes) {
         const series = seriesByCode[code];
-        if (!series || series.length < 5) continue;
+        if (!series || series.length < 5) { drop.履歴不足++; continue; }
         const sig = clientCalcSignals(series, signalMode);
+        if (sig.skipped) drop[sig.skipped] = (drop[sig.skipped] || 0) + 1;
         if (sig.patterns.length > 0) all.push({ code, name: codeMap[code] || code, ...sig });
+        else drop.該当なし++;
       }
+      const dropMsg = Object.entries(drop).filter(([, v]) => v > 0).map(([k, v]) => `${k}${v}`).join(" / ");
       all.sort((a, b) => b.score - a.score);
       setSResult(all);
-      setSStatus(all.length === 0
-        ? `${targetCodes.length}銘柄スキャン完了（${gotDays}日ぶん） — 条件を満たす銘柄なし`
-        : `完了！ ${targetCodes.length}銘柄中 ${all.length}銘柄検出（${gotDays}日ぶん）`);
+      setSStatus(`対象${targetCodes.length}銘柄 / ${gotDays}営業日 / 検出${all.length}件 — 内訳: ${dropMsg || "-"}`);
     } catch (e) { setSError(e.message); }
     finally { setSLoading(false); }
   }
@@ -745,6 +755,7 @@ export default function Home() {
               {filteredResults.length>0&&!sLoading && (
                 <div style={{display:"flex",flexDirection:"column",gap:10}}>
                   <div style={{fontSize:13,color:"#00e5a0",fontWeight:700,marginBottom:4}}>✅ {filteredResults.length}銘柄検出 — スコア順</div>
+                  <div style={{fontSize:11,color:"#6e7681",marginTop:-4,marginBottom:4}}>{sStatus}</div>
                   {filteredResults.map(r=><SignalCard key={r.code} r={r} onAnalyze={analyze}/>)}
                 </div>
               )}
