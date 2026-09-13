@@ -71,11 +71,17 @@ Web検索ツールを使い、IRバンク(irbank.net)・四季報オンライン
 verdictは「強い買い候補」「買い候補」「経過観察」「見送り」のいずれか。scoresは1〜10の整数。`;
 
 const HUNT_SYSTEM = `あなたは片山晃（五月さん）の投資哲学でテンバガー候補を発掘するAIエージェントです。
-Web検索ツールを使い、IRバンク・四季報・グロース市場等から最新データを取得し、指定テーマで有望な日本株を3銘柄発掘してください。
+Web検索ツールを使い、指定テーマで有望な日本株を3銘柄発掘してください。
 発掘基準: 売上成長率20%以上、ROE15%超が理想、創業者・オーナー経営者、独自参入障壁、テンバガー余地あり
+
+【重要・数値の扱い】
+売上成長率・ROE・PER・PBR・時価総額・株価などの財務数値は、このあとJ-Quantsの確定データで別途取得して表示します。
+あなたは数値を出力してはいけません。reason・appeal の文章中にも具体的な数値（「売上成長33%」「時価総額168億円」等）を書かないでください。
+数値ではなく、事業内容・参入障壁・経営者・市場環境といった定性的な根拠だけを書いてください。
+
 分析後、以下のJSON形式のみで出力。マークダウン記号や説明文は不要:
-{"theme_comment":"テーマへの一言（口語・80字）","candidates":[{"code":"銘柄コード","name":"企業名","market":"グロース","reason":"発掘理由（120字）","appeal":"最大の魅力（25字）","key_metrics":{"revenue_growth":"XX%","roe":"XX%","pbr":"X.X倍"},"scores":{"growth":8,"business":7,"management":8,"market":7,"finance":6,"valuation":7,"tenbagger":8}}]}
-candidatesは3件。marketは「グロース」「スタンダード」「プライム」のいずれか。scoresは1〜10の整数。`;
+{"theme_comment":"テーマへの一言（口語・80字）","candidates":[{"code":"銘柄コード","name":"企業名","market":"グロース","reason":"発掘理由（120字・数値なし）","appeal":"最大の魅力（25字・数値なし）","scores":{"growth":8,"business":7,"management":8,"market":7,"finance":6,"valuation":7,"tenbagger":8}}]}
+candidatesは3件。codeは4桁の証券コード。marketは「グロース」「スタンダード」「プライム」のいずれか。scoresは1〜10の整数。`;
 
 function extractJSON(text) {
   const cleaned = text.replace(/```json\s*/gi, "").replace(/```\s*/g, "").trim();
@@ -141,6 +147,69 @@ function Dots({ color = "#00e5a0" }) {
   );
 }
 
+// ══ J-Quants確定データのバッジ群 ══════════════
+// 緑＝J-Quants確定 / 灰＝AI取得（裏取り必要）
+function Badge({ label, value, sub, confirmed }) {
+  const col = confirmed ? "#00e5a0" : "#8b949e";
+  const bg  = confirmed ? "rgba(0,229,160,0.08)" : "rgba(139,148,158,0.06)";
+  const bd  = confirmed ? "rgba(0,229,160,0.25)" : "rgba(139,148,158,0.2)";
+  return (
+    <div title={sub || ""} style={{ display:"inline-flex",flexDirection:"column",gap:1,background:bg,border:`1px solid ${bd}`,borderRadius:6,padding:"4px 10px" }}>
+      <div style={{ display:"flex",alignItems:"center",gap:5 }}>
+        <span style={{ fontSize:10,color:"#8b949e" }}>{label}</span>
+        <span style={{ fontSize:12,color:col,fontWeight:700 }}>{value}</span>
+      </div>
+      {sub && <span style={{ fontSize:9,color:"#6e7681",lineHeight:1.3 }}>{sub}</span>}
+    </div>
+  );
+}
+
+function ConfirmedMetrics({ jq, km }) {
+  if (jq?.loading) {
+    return <div style={{ fontSize:11,color:"#6e7681" }}>📊 J-Quants確定データを取得中...</div>;
+  }
+  if (!jq || jq.error) {
+    // 確定データが取れなかった場合のみAI数値をフォールバック表示（灰色＝要裏取り）
+    const has = km && (km.revenue_growth || km.roe || km.pbr);
+    return (
+      <div style={{ display:"flex",flexWrap:"wrap",gap:6,alignItems:"center" }}>
+        {has && <>
+          {km.revenue_growth && <Badge label="売上成長(AI)" value={km.revenue_growth} confirmed={false} />}
+          {km.roe && <Badge label="ROE(AI)" value={km.roe} confirmed={false} />}
+          {km.pbr && <Badge label="PBR(AI)" value={km.pbr} confirmed={false} />}
+        </>}
+        <span style={{ fontSize:10,color:"#ff6b6b" }}>
+          ⚠ J-Quants確定データ未取得{jq?.error ? `（${jq.error}）` : ""} — 配信前に裏取りが必要
+        </span>
+      </div>
+    );
+  }
+
+  const cap = jq.marketCapOku !== null && jq.marketCapOku !== undefined
+    ? (jq.marketCapOku >= 10000 ? `${(jq.marketCapOku/10000).toFixed(2)}兆円` : `${jq.marketCapOku.toLocaleString()}億円`)
+    : null;
+
+  return (
+    <div style={{ display:"flex",flexDirection:"column",gap:6 }}>
+      <div style={{ display:"flex",flexWrap:"wrap",gap:6 }}>
+        {jq.stockPrice != null && <Badge label="株価" value={`${jq.stockPrice.toLocaleString()}円`} sub={jq.priceDate ? `${jq.priceDate} 終値` : null} confirmed />}
+        {cap && <Badge label="時価総額" value={cap} sub="終値×(発行済−自己株式)" confirmed />}
+        {jq.salesYoY != null && <Badge label="売上成長" value={`${jq.salesYoY > 0 ? "+" : ""}${jq.salesYoY}%`} sub={jq.salesYoYBasis} confirmed />}
+        {jq.roe != null && <Badge label="ROE" value={`${jq.roe}%`} sub={jq.roeBasis} confirmed />}
+        {jq.per != null && <Badge label="PER" value={`${jq.per}倍`} confirmed />}
+        {jq.pbr != null && <Badge label="PBR" value={`${jq.pbr}倍`} confirmed />}
+        {jq.equityRatio && <Badge label="自己資本比率" value={`${jq.equityRatio}%`} confirmed />}
+      </div>
+      <div style={{ fontSize:10,color:"#6e7681" }}>
+        ✅ 緑＝J-Quants確定データ
+        {jq.statementDate ? ` / 決算開示 ${jq.statementDate}` : ""}
+        {jq.fetchedAt ? ` / 取得 ${jq.fetchedAt}` : ""}
+        {Array.isArray(jq.failed) && jq.failed.length > 0 ? ` / 未取得: ${jq.failed.join("・")}` : ""}
+      </div>
+    </div>
+  );
+}
+
 function CandidateCard({ c, rank, onAnalyze }) {
   const rc = rank === 0 ? "#00e5a0" : rank === 1 ? "#4db8ff" : "#ffd166";
   const mc = c.market === "グロース" ? "#ffd166" : c.market === "スタンダード" ? "#4db8ff" : "#8b949e";
@@ -165,13 +234,13 @@ function CandidateCard({ c, rank, onAnalyze }) {
           </div>
         </div>
         {c.appeal && <div style={{ background: "rgba(0,229,160,0.06)", border: "1px solid rgba(0,229,160,0.18)", borderRadius: 7, padding: "8px 13px", fontSize: 13, color: "#00e5a0", fontWeight: 700 }}>✨ {c.appeal}</div>}
-        {Object.keys(km).length > 0 && (
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-            {km.revenue_growth && <div style={{ display:"inline-flex",alignItems:"center",gap:5,background:"rgba(77,184,255,0.08)",border:"1px solid rgba(77,184,255,0.2)",borderRadius:6,padding:"4px 10px" }}><span style={{fontSize:10,color:"#8b949e"}}>売上成長</span><span style={{fontSize:12,color:"#4db8ff",fontWeight:700}}>{km.revenue_growth}</span></div>}
-            {km.roe && <div style={{ display:"inline-flex",alignItems:"center",gap:5,background:"rgba(77,184,255,0.08)",border:"1px solid rgba(77,184,255,0.2)",borderRadius:6,padding:"4px 10px" }}><span style={{fontSize:10,color:"#8b949e"}}>ROE</span><span style={{fontSize:12,color:"#4db8ff",fontWeight:700}}>{km.roe}</span></div>}
+        <ConfirmedMetrics jq={c.jq} km={km} />
+        {c.reason && (
+          <div style={{ fontSize: 13, color: "#8b949e", lineHeight: 1.75 }}>
+            {c.reason}
+            <span style={{ marginLeft: 6, fontSize: 10, color: "#6e7681", border: "1px solid #30363d", borderRadius: 4, padding: "1px 5px", whiteSpace: "nowrap" }}>AI定性</span>
           </div>
         )}
-        {c.reason && <div style={{ fontSize: 13, color: "#8b949e", lineHeight: 1.75 }}>{c.reason}</div>}
         <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
           {CRITERIA.map(cr => (
             <div key={cr.key} style={{ display: "grid", gridTemplateColumns: "110px 1fr", alignItems: "center", gap: 10 }}>
@@ -382,7 +451,32 @@ export default function Home() {
     try {
       const res = await callAPI(HUNT_SYSTEM, `片山晃流で「${theme.label}」テーマの日本株テンバガー候補を3銘柄発掘してください。JSONのみ出力。`);
       if (!Array.isArray(res.candidates)||res.candidates.length===0) throw new Error("候補データが取得できませんでした");
-      setHuntResult(res);
+
+      // まず定性分析だけ表示し、確定データは取得中として出す
+      const withPending = { ...res, candidates: res.candidates.map(c => ({ ...c, jq: { loading: true } })) };
+      setHuntResult(withPending);
+      setLoading(false);
+
+      // J-Quants確定データで数値を上書き
+      setStatusMsg("📊 J-Quants確定データを照合中...");
+      const codes = res.candidates.map(c => String(c.code || "").trim()).filter(Boolean);
+      try {
+        const jr = await fetch("/api/jquants", {
+          method:"POST", headers:{"Content-Type":"application/json"},
+          body: JSON.stringify({ action:"fetchMany", apiKey: jqApiKey, codes }),
+        });
+        const jd = await jr.json();
+        const map = jd.results || {};
+        setHuntResult({
+          ...res,
+          candidates: res.candidates.map(c => ({ ...c, jq: map[String(c.code || "").trim()] || { error:"該当なし" } })),
+        });
+      } catch (e) {
+        setHuntResult({
+          ...res,
+          candidates: res.candidates.map(c => ({ ...c, jq: { error: e.message } })),
+        });
+      }
     } catch(e) { setError(e.message); }
     finally { setLoading(false); setStatusMsg(""); }
   }
