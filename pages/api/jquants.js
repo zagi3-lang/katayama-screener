@@ -27,30 +27,37 @@ const pickStr = (obj, keys) => {
 };
 
 const K = {
-  netSales:    ["NetSales", "net_sales", "Sales", "sales", "Revenue", "revenue"],
-  opProfit:    ["OperatingProfit", "operating_profit", "OperatingIncome"],
-  netProfit:   ["Profit", "profit", "NetIncome", "net_income"],
-  eps:         ["EarningsPerShare", "eps", "EPS", "earnings_per_share"],
-  bps:         ["BookValuePerShare", "bps", "BPS", "book_value_per_share"],
-  equity:      ["Equity", "equity", "NetAssets", "net_assets", "TotalNetAssets"],
-  equityRatio: ["EquityToAssetRatio", "equity_to_asset_ratio", "EquityRatio", "equity_ratio"],
-  fcastSales:  ["ForecastNetSales", "forecast_net_sales"],
-  fcastOp:     ["ForecastOperatingProfit", "forecast_operating_profit"],
-  fcastEps:    ["ForecastEarningsPerShare", "forecast_eps", "ForecastEPS"],
+  // ── J-Quants v2 の実フィールド名（略称）を先頭に置く ──
+  // v1系の長い名前は互換のため後ろに残す
+  netSales:    ["Sales", "NetSales", "net_sales", "sales", "Revenue", "revenue"],
+  opProfit:    ["OP", "OperatingProfit", "operating_profit", "OperatingIncome"],
+  ordProfit:   ["OdP", "OrdinaryProfit", "ordinary_profit"],
+  netProfit:   ["NP", "Profit", "profit", "NetIncome", "net_income"],
+  eps:         ["EPS", "EarningsPerShare", "eps", "earnings_per_share"],
+  dilutedEps:  ["DEPS", "DilutedEarningsPerShare"],
+  bps:         ["BPS", "BookValuePerShare", "bps", "book_value_per_share"],
+  totalAssets: ["TA", "TotalAssets", "total_assets"],
+  equity:      ["Eq", "Equity", "equity", "NetAssets", "net_assets", "TotalNetAssets"],
+  equityRatio: ["EqAR", "EquityToAssetRatio", "equity_to_asset_ratio", "EquityRatio", "equity_ratio"],
+  fcastSales:  ["FcstSales", "NxtYrFcstSales", "ForecastNetSales", "forecast_net_sales"],
+  fcastOp:     ["FcstOP", "NxtYrFcstOP", "ForecastOperatingProfit", "forecast_operating_profit"],
+  fcastEps:    ["FcstEPS", "NxtYrFcstEPS", "ForecastEarningsPerShare", "forecast_eps", "ForecastEPS"],
+  // 発行済株式数・自己株式：v2での略称が未確認のため候補を広めに取る
   shares: [
+    "ShOut", "IssShares", "NumShares", "SharesOut", "TotalShares",
     "NumberOfIssuedAndOutstandingSharesAtTheEndOfFiscalYearIncludingTreasuryStock",
-    "number_of_issued_and_outstanding_shares_at_the_end_of_fiscal_year_including_treasury_stock",
     "NumberOfIssuedAndOutstandingShares", "IssuedShares", "issued_shares",
   ],
   treasury: [
+    "TrSh", "TreasuryShares", "NumTreasury", "TrStock",
     "NumberOfTreasuryStockAtTheEndOfFiscalYear",
-    "number_of_treasury_stock_at_the_end_of_fiscal_year",
     "NumberOfTreasuryStock", "treasury_stock",
   ],
-  period:    ["TypeOfCurrentPeriod", "type_of_current_period", "Period", "period"],
-  periodEnd: ["CurrentPeriodEndDate", "current_period_end_date", "PeriodEndDate"],
-  fyEnd:     ["CurrentFiscalYearEndDate", "current_fiscal_year_end_date"],
-  disclosed: ["DisclosedDate", "disclosed_date", "Date", "date"],
+  period:    ["CurPerType", "TypeOfCurrentPeriod", "type_of_current_period", "Period", "period"],
+  periodEnd: ["CurPerEn", "CurrentPeriodEndDate", "current_period_end_date", "PeriodEndDate"],
+  fyEnd:     ["CurFYEn", "CurrentFiscalYearEndDate", "current_fiscal_year_end_date"],
+  disclosed: ["DiscDate", "DisclosedDate", "disclosed_date", "Date", "date"],
+  docType:   ["DocType", "TypeOfDocument", "type_of_document"],
 };
 
 const fmtDate = (d) =>
@@ -197,7 +204,7 @@ async function fetchOne(code, headers) {
       if (Array.isArray(arr) && arr.length > 0) {
         stmts = arr;
         debug.fins_len = arr.length;
-        debug.fins_keys = Object.keys(arr[0]).slice(0, 30);
+        debug.fins_keys = Object.keys(arr[0]); // 全件（株式数フィールド特定のため）
         break;
       }
     } catch (e) { debug.fins_err = e.message; }
